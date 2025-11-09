@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",          /* Compile to a modern, fast JS version */
+    "module": "CommonJS",       /* <-- THIS IS THE FIX: Output CommonJS modules */
+    "moduleResolution": "node",   /* <-- THIS IS THE FIX: Use Node's classic way to find modules */
+    "outDir": "./dist",           /* Where to put the compiled JavaScript */
+    "esModuleInterop": true,    /* Allows `import express from 'express'` */
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,             /* Enable all strict type-checking */
+    "skipLibCheck": true        /* Skip type checking of declaration files */
+  },
+  "include": ["src/**/*"]     /* Only compile files in our 'src' folder */
+}

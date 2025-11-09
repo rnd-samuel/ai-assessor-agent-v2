@@ -1,0 +1,286 @@
+// frontend/src/pages/ProjectsDashboard.tsx
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useUserStore } from '../state/userStore';
+import apiService from '../services/apiService';
+
+// Define the shape of a Project (matches our new API response)
+interface Project {
+  id: string;
+  date: string;
+  name: string;
+  reports: number;
+  canArchive: boolean;
+}
+
+export default function ProjectsDashboard() {
+  const navigate = useNavigate();
+  const role = useUserStore((state) => state.role);
+  
+  // --- STATE ---
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [archivedProjects, _setArchivedProjects] = useState<Project[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [showingArchived, setShowingArchived] = useState(false); //P4
+  const [modals, setModals] = useState({ archive: false, unarchive: false });
+  const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set()); //P3
+
+  // --- DATA FETCHING (NEW) ---
+  useEffect(() => {
+    // This function runs once when the component loads
+    fetchProjects();
+  }, []); // The empty array [] means it only runs once
+
+  const fetchProjects = async () => {
+    setIsLoading(true);
+    try {
+        // (U9) Use our apiService to call the protected endpoint
+        const response = await apiService.get('/projects');
+        setProjects(response.data);
+    } catch (error) {
+        console.error("Failed to fetch projects:", error);
+    } finally {
+        setIsLoading(false);
+    }
+  };
+
+  // We'll wire this up later
+  // @ts-ignore: This is a placeholder for a future feature
+  const _fetchArchivedProjects = async () => {
+    // const response = await apiService.get('/projects/archived');
+    // setArchivedProjects(response.data);
+  };
+  
+  // Real modal handlers (FIXED)
+  const openModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: true }));
+  const closeModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: false }));
+
+  // (U10) Mock handler for row click
+  const navigateToReport = (projectId: string) => {
+    navigate(`/projects/${projectId}`);
+  };
+
+  // Handler for table row checkboxes
+  const handleSelect = (projectId: string) => {
+    const newSelection = new Set(selectedProjects);
+    if (newSelection.has(projectId)) {
+      newSelection.delete(projectId);
+    } else {
+      newSelection.add(projectId);
+    }
+    setSelectedProjects(newSelection);
+  };
+
+  // Handler for "Select All" checkbox
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>, projects: typeof currentProjects) => {
+    if (e.target.checked) {
+      const allIds = projects.map(p => p.id);
+      setSelectedProjects(new Set(allIds));
+    } else {
+      setSelectedProjects(new Set());
+    }
+  };
+  
+  const currentProjects = showingArchived ? archivedProjects : projects;
+  const canSelectAll = currentProjects.length > 0;
+  const allSelected = canSelectAll && selectedProjects.size === currentProjects.length;
+
+  return (
+    <div className="p-8">
+      {/* Page Header (U8) */}
+      <h1 className="text-3xl font-bold text-text-primary">Projects Dashboard</h1>
+
+      {/* Toolbar (U12, P4) */}
+      <div className="flex justify-between items-center mt-6 mb-4">
+        <div className="flex items-center gap-3">
+          {/* Search Bar (U12) */}
+          <div className="relative w-72">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-text-muted"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </div>
+            <input
+              type="text"
+              placeholder={showingArchived ? 'Search archived projects...' : 'Search projects...'}
+              className="w-full rounded-md border border-border pl-9 pr-3 py-2 bg-bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+            />
+          </div>
+
+          {/* Toggle Archived (P4) */}
+          {(role === 'Project Manager' || role === 'Admin') && (
+            <button
+              onClick={() => {
+                setShowingArchived(!showingArchived);
+                setSelectedProjects(new Set()); // Clear selection on view change
+              }}
+              className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors"
+            >
+              {showingArchived ? 'Show Active' : 'Show Archived'}
+            </button>
+          )}
+        </div>
+
+        {/* Bulk Action Buttons (P3, P4) */}
+        {(role === 'Project Manager' || role === 'Admin') && !showingArchived && selectedProjects.size > 0 && (
+          <button
+            onClick={() => openModal('archive')}
+            className="bg-error text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-red-700 transition-colors"
+          >
+            Archive Selected ({selectedProjects.size})
+          </button>
+        )}
+        {(role === 'Project Manager' || role === 'Admin') && showingArchived && selectedProjects.size > 0 && (
+          <button
+            onClick={() => openModal('unarchive')}
+            className="bg-info text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-blue-700 transition-colors"
+          >
+            Unarchive Selected ({selectedProjects.size})
+          </button>
+        )}
+      </div>
+
+      {/* Projects Table (P3, U9) */}
+      <div className="bg-bg-light rounded-lg shadow-md border border-border overflow-hidden">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="bg-bg-medium border-b border-border">
+              {/* Checkbox Column (P3) */}
+              {(role === 'Project Manager' || role === 'Admin') && (
+                <th className="p-3 w-12 text-center">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded-sm border-border accent-primary align-middle"
+                    checked={allSelected}
+                    onChange={(e) => handleSelectAll(e, currentProjects)}
+                  />
+                </th>
+              )}
+              {/* (U9) Columns */}
+              <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/50">Date</th>
+              <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/50">Name</th>
+              <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/50">No. of Reports</th>
+              
+              {/* Actions Column (P3) */}
+              {(role === 'Project Manager' || role === 'Admin') && (
+                <th className="p-3 pr-6 font-semibold text-text-secondary text-right">Actions</th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {/* --- LOADING STATE --- */}
+            {isLoading && (
+                <tr>
+                    <td colSpan={5} className="p-12 text-center text-text-muted">
+                        Loading projects...
+                    </td>
+                </tr>
+            )}
+
+            {/* --- EMPTY STATE --- */}
+            {!isLoading && currentProjects.length === 0 && (
+                <tr>
+                    <td colSpan={5} className="p-12 text-center text-text-muted">
+                        {showingArchived
+                          ? "No archived projects found."
+                          : (role === 'User'
+                            ? "You have not been invited to any projects."
+                            : "No active projects found. Try creating one!")
+                        }
+                    </td>
+                </tr>
+            )}
+
+            {/* --- REAL DATA MAP --- */}
+            {!isLoading && currentProjects.map((project) => (
+                <tr key={project.id} className="border-b border-border hover:bg-bg-medium">
+                    {(role === 'Project Manager' || role === 'Admin') && (
+                        <td className="p-3 w-12 text-center">
+                            <input
+                              type="checkbox"
+                              className="row-checkbox w-4 h-4 rounded-sm border-border accent-primary align-middle"
+                              checked={selectedProjects.has(project.id)}
+                              onChange={() => handleSelect(project.id)}
+                            />
+                        </td>
+                    )}
+                    <td className="p-3 clickable-row" onClick={() => navigateToReport(project.id)}>{project.date}</td>
+                    <td className="p-3 font-medium text-text-primary clickable-row" onClick={() => navigateToReport(project.id)}>{project.name}</td>
+                    <td className="p-3 clickable-row" onClick={() => navigateToReport(project.id)}>
+                        {project.reports > 0 ? project.reports : '-'}
+                    </td>
+                    {(role === 'Project Manager' || role === 'Admin') && (
+                        <td className="p-3 pr-6 text-right">
+                            {showingArchived ? (
+                                <button
+                                  className="text-xs text-text-secondary hover:text-info"
+                                  onClick={() => openModal('unarchive')}
+                                >
+                                    Unarchive
+                                </button>
+                            ) : (
+                                <button
+                                  className={`text-xs ${project.canArchive ? 'text-text-secondary hover:text-error' : 'text-text-muted/70 cursor-not-allowed'}`}
+                                  onClick={project.canArchive ? () => openModal('archive') : undefined}
+                                  disabled={!project.canArchive}
+                                >
+                                    Archive
+                                </button>
+                            )}
+                        </td>
+                    )}
+                </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      
+      {/* --- MODALS --- */}
+
+      {/* Archive Confirmation Modal (P3) */}
+      {modals.archive && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
+            <div className="flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-text-primary">Archive Project(s)?</h3>
+              <button className="text-text-muted hover:text-text-primary" onClick={() => closeModal('archive')}>&times;</button>
+            </div>
+            <p className="text-sm text-text-secondary mt-2">
+              Are you sure you want to archive the selected project(s)? You can restore them later.
+            </p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('archive')}>
+                Cancel
+              </button>
+              <button className="bg-error text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-red-700" onClick={() => closeModal('archive')}>
+                Archive
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Unarchive Confirmation Modal (P4) */}
+      {modals.unarchive && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
+            <div className="flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-text-primary">Unarchive Project(s)?</h3>
+              <button className="text-text-muted hover:text-text-primary" onClick={() => closeModal('unarchive')}>&times;</button>
+            </div>
+            <p className="text-sm text-text-secondary mt-2">
+              This action will restore the selected project(s) to the active list.
+            </p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('unarchive')}>
+                Cancel
+              </button>
+              <button className="bg-info text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-blue-700" onClick={() => closeModal('unarchive')}>
+                Unarchive
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+    </div>
+  );
+}

@@ -1,0 +1,340 @@
+// frontend/src/pages/NewReportPage.tsx
+import { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import apiService from '../services/apiService';
+
+// (FIXED) 1. Updated the interface
+type FileStatus = 'uploading' | 'processing' | 'complete';
+interface UploadedFile {
+  id: string;
+  name: string;
+  status: FileStatus;
+  simulationMethod: string; // <-- This will store the dropdown value
+}
+
+// Mock data for competency list (from U25)
+const competencies = [
+  { id: 'comm', name: 'Communication' },
+  { id: 'ps', name: 'Problem Solving' },
+  { id: 'lead', name: 'Leadership' },
+];
+
+// (FIXED) 2. Moved FileListItem component OUTSIDE
+// This stops it from re-rendering and losing state
+const FileListItem = ({ 
+  file, 
+  onMethodChange 
+}: { 
+  file: UploadedFile, 
+  onMethodChange: (fileId: string, method: string) => void 
+}) => {
+  return (
+    <div className="p-3 bg-bg-medium rounded-md border border-border">
+      {file.status === 'complete' ? (
+        // "Complete" view with dropdown
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+
+          {/* (FIXED) File name now truncates */}
+          <p className="text-sm font-medium text-text-primary truncate min-w-0 flex-1">
+            {file.name}
+          </p>
+
+          {/* (FIXED) Dropdown group will not shrink */}
+          <div className="flex items-center gap-2 mt-2 sm:mt-0 flex-shrink-0">
+            <label htmlFor={`select-${file.id}`} className="text-sm text-text-secondary flex-shrink-0">Simulation Method:</label>
+            <select 
+              id={`select-${file.id}`} 
+              className="w-full sm:w-48 rounded-md border border-border px-3 py-1.5 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+              value={file.simulationMethod} // <-- Read value from state
+              onChange={(e) => onMethodChange(file.id, e.target.value)} // <-- Update state
+            >
+              <option value="">Select method...</option>
+              <option value="case-study">Case Study</option>
+              <option value="roleplay">Roleplay</option>
+              <option value="lgd">LGD</option>
+              <option value="bei">BEI</option>
+              <option value="in-tray">In-tray</option>
+            </select>
+          </div>
+        </div>
+      ) : (
+        // "Uploading/Processing" view with progress bar
+        <div>
+          {/* ... (this part is unchanged) ... */}
+          <div className="flex justify-between items-center">
+            <p className="text-sm font-medium text-text-primary">{file.name}</p>
+            <p className="text-sm text-text-muted capitalize">{file.status}...</p>
+          </div>
+          <div className="mt-2 h-2 bg-border rounded-full overflow-hidden">
+            <div 
+              className="h-2 bg-primary rounded-full transition-all duration-1000 ease-out"
+              style={{ width: file.status === 'uploading' ? '30%' : '100%' }}
+            ></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+export default function NewReportPage() {
+  const navigate = useNavigate();
+  const { projectId } = useParams();
+
+  const [files, setFiles] = useState<UploadedFile[]>([]);
+  const [isGeneratingDisabled, setIsGeneratingDisabled] = useState(true);
+  
+  const [globalTarget, setGlobalTarget] = useState('4');
+  const [specificTargets, setSpecificTargets] = useState<Record<string, string>>(() => {
+    const newTargets: Record<string, string> = {};
+    competencies.forEach(comp => {
+      newTargets[comp.id] = globalTarget;
+    });
+    return newTargets;
+  });
+
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+
+  useEffect(() => {
+    const newTargets: Record<string, string> = {};
+    competencies.forEach(comp => {
+      newTargets[comp.id] = globalTarget;
+    });
+    setSpecificTargets(newTargets);
+  }, [globalTarget]);
+
+  const handleSpecificTargetChange = (compId: string, value: string) => {
+    setSpecificTargets(prev => ({
+      ...prev,
+      [compId]: value,
+    }));
+  };
+
+  const handleFilesUpload = (fileList: FileList) => {
+    if (fileList.length === 0) return;
+    
+    setIsGeneratingDisabled(true);
+
+    const newFiles: UploadedFile[] = Array.from(fileList).map(file => ({
+      id: `file-${Date.now()}-${file.name}`,
+      name: file.name,
+      status: 'uploading',
+      simulationMethod: '', // (FIXED) 3. Initialize with empty method
+    }));
+
+    setFiles(prev => [...prev, ...newFiles]);
+
+    // --- MOCK PROCESSING ---
+    newFiles.forEach(file => {
+      setTimeout(() => {
+        setFiles(prev => prev.map(f => f.id === file.id ? { ...f, status: 'processing' } : f));
+        setTimeout(() => {
+          setFiles(prev => prev.map(f => f.id === file.id ? { ...f, status: 'complete' } : f));
+        }, 1000); // Shorter delay
+      }, 500); // Shorter delay
+    });
+  };
+  
+  // (FIXED) 4. Add handler to update the file's state
+  const handleMethodChange = (fileId: string, method: string) => {
+    setFiles(prevFiles => 
+      prevFiles.map(file => 
+        file.id === fileId ? { ...file, simulationMethod: method } : file
+      )
+    );
+  };
+
+  useEffect(() => {
+    if (files.length === 0) {
+      setIsGeneratingDisabled(true);
+      return;
+    }
+    const allComplete = files.every(f => f.status === 'complete');
+    setIsGeneratingDisabled(!allComplete);
+  }, [files]);
+
+  const handleGenerateReport = async () => {
+    const title = (document.getElementById('report-title') as HTMLInputElement).value;
+    const specificContext = (document.getElementById('report-context') as HTMLTextAreaElement).value;
+
+    if (!title) {
+      alert("Please enter a report title.");
+      return;
+    }
+    
+    // (FIXED) We can now get the file methods from state
+    const fileMethods = files.map(f => ({ 
+      name: f.name, 
+      method: f.simulationMethod 
+    }));
+    // We'll add this to the payload later.
+    console.log("File methods:", fileMethods);
+    
+    try {
+      const payload = {
+        title,
+        projectId,
+        targetLevels: specificTargets,
+        specificContext,
+      };
+      
+      console.log("Sending payload to /api/reports:", payload);
+
+      const response = await apiService.post('/reports', payload);
+      const { reportId } = response.data;
+
+      // (FIXED) Navigate to the correct, plural-path route
+      navigate(`/reports/${reportId}`);
+
+    } catch (error) {
+      console.error("Failed to create report:", error);
+      alert("Error: Could not create report.");
+    }
+  };
+
+  return (
+    <>
+      <main className="flex-1 h-screen overflow-y-auto bg-bg-medium">
+        {/* Page Header */}
+        <div className="sticky top-0 bg-bg-medium/80 backdrop-blur-sm z-10 p-8 pb-4">
+          <h1 className="text-3xl font-bold text-text-primary">Create New Report</h1>
+        </div>
+        
+        {/* Page Content */}
+        <div className="p-8 pt-0 space-y-6 max-w-4xl mx-auto">
+        
+            {/* 1. Report Title (U22) */}
+            <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
+              <label htmlFor="report-title" className="text-lg font-semibold text-text-primary mb-3 block">Report Title</label>
+              <input type="text" id="report-title" placeholder="e.g., Analysis of Candidate A" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none" />
+            </div>
+
+            {/* 2. Upload Assessment Results (U23, U24) */}
+            <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
+              <label className="text-lg font-semibold text-text-primary mb-3 block">Assessment Results</label>
+              <div 
+                id="file-uploader" 
+                className="w-full border-2 border-dashed border-border rounded-lg bg-bg-medium p-8 text-center cursor-pointer hover:border-primary"
+                onClick={() => document.getElementById('file-input')?.click()}
+              >
+                 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-text-muted mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
+                <p className="text-xs text-text-muted mt-1">PDF, DOCX, or TXT (Multi-file supported)</p>
+              </div>
+              <input 
+                type="file" 
+                id="file-input" 
+                multiple 
+                className="hidden" 
+                onChange={(e) => handleFilesUpload(e.target.files!)} 
+              />
+              
+              {/* (FIXED) 5. Pass the handler to the child component */}
+              <div id="file-list" className="mt-4 space-y-3">
+                {files.map(file => (
+                  <FileListItem 
+                    key={file.id} 
+                    file={file} 
+                    onMethodChange={handleMethodChange} 
+                  />
+                ))}
+              </div>
+            </div>
+            
+            {/* 3. Set Competency Targets (U25) */}
+            <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
+              <label className="text-lg font-semibold text-text-primary mb-3 block">Competency Targets</label>
+              <p className="text-sm text-text-secondary mb-4">Set a global target level for all competencies, and override specific targets as needed.</p>
+              
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="comp-global-select" className="text-sm font-medium text-text-primary">Global Target Level</label>
+                  <select 
+                    id="comp-global-select" 
+                    className="w-24 rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+                    value={globalTarget}
+                    onChange={(e) => setGlobalTarget(e.target.value)}
+                  >
+                    <option>1</option>
+                    <option>2</option>
+                    <option>3</option>
+                    <option>4</option>
+                    <option>5</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-4 mt-6">
+                <label className="text-sm font-semibold text-text-primary mb-0 block border-b border-border pb-2">Specific Target Overrides</label>
+                
+                {competencies.map(comp => (
+                  <div key={comp.id} className="flex items-center justify-between pt-4">
+                    <label htmlFor={`comp-${comp.id}`} className="text-sm font-medium text-text-primary">{comp.name}</label>
+                    <select 
+                      id={`comp-${comp.id}`}
+                      className="w-24 rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none specific-comp-select"
+                      value={specificTargets[comp.id] || globalTarget}
+                      onChange={(e) => handleSpecificTargetChange(comp.id, e.target.value)}
+                    >
+                      <option>1</option>
+                      <option>2</option>
+                      <option>3</option>
+                      <option>4</option>
+                      <option>5</option>
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* 4. Additional Specific Context (U26) */}
+            <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
+              <label htmlFor="report-context" className="text-lg font-semibold text-text-primary mb-3 block">Additional Specific Context</label>
+              <p className="text-sm text-text-secondary mb-4">Add any specific context for this report...</p>
+              <textarea id="report-context" rows={4} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm" placeholder="Type here..."></textarea>
+            </div>
+
+            {/* Action Buttons (U27) */}
+            <div className="flex justify-end gap-3 pt-4">
+              <button 
+                onClick={() => setIsCancelModalOpen(true)}
+                className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                id="generate-btn" 
+                className={`bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors ${isGeneratingDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={isGeneratingDisabled}
+                onClick={handleGenerateReport}
+              >
+                Generate Report
+              </button>
+            </div>
+        </div>
+      </main>
+
+      {/* Cancel Confirmation Modal (P15) */}
+      {isCancelModalOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
+            <div className="flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-text-primary">Are you sure?</h3>
+              <button className="text-text-muted hover:text-text-primary" onClick={() => setIsCancelModalOpen(false)}>&times;</button>
+            </div>
+            <p className="text-sm text-text-secondary mt-2">Any unsaved changes will be lost.</p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => setIsCancelModalOpen(false)}>
+                No
+              </button>
+              <button className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover" onClick={() => { setIsCancelModalOpen(false); navigate(`/projects/${projectId}`); }}>
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
