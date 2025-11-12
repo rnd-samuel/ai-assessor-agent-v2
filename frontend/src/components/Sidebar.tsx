@@ -1,6 +1,13 @@
 // frontend/src/components/Sidebar.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useUserStore } from '../state/userStore';
+import { Link, useNavigate } from 'react-router-dom';
+import apiService from '../services/apiService';
+
+interface Project {
+  id: string;
+  name: string;
+}
 
 export default function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -8,13 +15,21 @@ export default function Sidebar() {
   // Get the user's role to show/hide links
   const role = useUserStore((state) => state.role);
   const clearUser = useUserStore((state) => state.clearUser);
-  // FOR TESTING: You can temporarily hardcode this to see the links
-  // const role = 'Admin'; 
+  const navigate = useNavigate();
+  const [projects, setProjects] = useState<Project[]>([]);
 
-  const projects = [
-    { id: 1, name: 'Q4 Leadership Assessment' },
-    { id: 2, name: 'Graduate Trainee Program' },
-  ];
+  useEffect(() => {
+    const fetchProjects = async () => {
+      try {
+        const response = await apiService.get('/projects');
+        setProjects(response.data);
+      } catch (error) {
+        console.error("Failed to fetch projects for sidebar:", error);
+      }
+    };
+
+    fetchProjects();
+  }, []);
 
   return (
     <aside 
@@ -42,20 +57,20 @@ export default function Sidebar() {
         <nav className="flex-grow px-4 py-4 space-y-1">
           
           {/* (U5) Projects Dashboard Link - Correct Icon */}
-          <a href="#" className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-semibold bg-bg-medium text-text-primary">
+          <Link to="/projects" className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-semibold bg-bg-medium text-text-primary">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 flex-shrink-0"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
             <span className="nav-text" style={{ display: isCollapsed ? 'none' : 'inline' }}>Projects Dashboard</span>
-          </a>
+          </Link>
 
           {/* (P1) New Project Link - ADDED */}
           {(role === 'Project Manager' || role === 'Admin') && (
-            <a href="#" className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-text-secondary hover:bg-bg-medium hover:text-text-primary">
+            <Link to="/projects/new" className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-text-secondary hover:bg-bg-medium hover:text-text-primary">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 flex-shrink-0"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
               <span className="nav-text" style={{ display: isCollapsed ? 'none' : 'inline' }}>New Project</span>
-            </a>
+            </Link>
           )}
 
-          {/* (U6, P2) Project Sub-Navigation - Logic Update */}
+          {/* (U6, P2) Project Sub-Navigation */}
           <div className="pt-2" style={{ display: isCollapsed ? 'none' : 'block' }}>
             <hr className="border-border" />
             <h3 className="px-3 pt-3 pb-1 text-xs font-semibold text-text-muted uppercase tracking-wider nav-text">Projects</h3>
@@ -66,11 +81,15 @@ export default function Sidebar() {
           <div style={{ display: isCollapsed ? 'none' : 'block' }}>
             {projects.length > 0 ? (
               projects.map((project) => (
-                <a key={project.id} href="#" className="flex items-center py-2.5 pr-3 pl-11 rounded-md text-sm font-medium text-text-secondary hover:bg-bg-medium hover:text-text-primary">
+                <Link
+                  key={project.id}
+                  to={'/projects/${project.id}'}
+                  className="flex items-center py-2.5 pr-3 pl-11 rounded-md text-sm font-medium text-text-secondary hover:bg-bg-medium hover:text-text-primary"
+                >
                   <span className="nav-text whitespace-nowrap overflow-hidden text-ellipsis">
                     {project.name}
                   </span>
-                </a>
+                </Link>
               ))
             ) : (
               <div className="px-3 pt-3 pb-1 text-xs text-text-muted nav-text">
@@ -83,22 +102,21 @@ export default function Sidebar() {
           {role === 'Admin' && (
             <>
               <div className="pt-2"><hr className="border-border" /></div>
-              <a href="#" className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-text-secondary hover:bg-bg-medium hover:text-text-primary nav-text">
+              <Link to="/admin" className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-text-secondary hover:bg-bg-medium hover:text-text-primary nav-text">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 flex-shrink-0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
                 <span className="nav-text" style={{ display: isCollapsed ? 'none' : 'inline' }}>Admin Panel</span>
-              </a>
+              </Link>
             </>
           )}
         </nav>
 
-        {/* Sidebar Footer (Log Out) - Correct Icon */}
+        {/* Sidebar Footer (Log Out) */}
         <div className="mt-auto border-t border-border p-4">
           <button
             onClick={() => {
               clearUser();
               localStorage.removeItem('authToken');
-              // No need to redirect: AppRoutes will see
-              // 'isAuthenticated' is false and show LoginPage.
+              navigate('/login');
             }}
             className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-text-secondary hover:bg-bg-medium hover:text-text-primary w-full"
           >

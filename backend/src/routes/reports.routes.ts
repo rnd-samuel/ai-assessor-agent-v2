@@ -2,6 +2,7 @@
 import { Router, Request } from 'express';
 import { authenticateToken } from '../middleware/auth.middleware';
 import { query } from '../services/db';
+import { aiGenerationQueue } from '../services/queue';
 
 interface AuthenticatedRequest extends Request {
   user?: {
@@ -36,8 +37,15 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
 
     const newReportId = result.rows[0].id;
 
+    // (NR-6.4) Queue the Phase 1 AI generation job
+    // The worker needs to know which report to work on and who to notify
+    await aiGenerationQueue.add('generate-phase-1', {
+      reportId: newReportId,
+      userId: creatorId
+    });
+
     res.status(201).json({
-      message: "Report record created. Ready for file upload and generation.",
+      message: "Report record created. Generation started.",
       reportId: newReportId
     });
 

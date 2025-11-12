@@ -128,6 +128,61 @@ router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), a
 });
 
 /**
+ * (NR-6.2, NR-6.3)
+ * Get the necessary data for filling out the "New Report" form.
+ * This includes the project's competency dictionary and its simulation methods.
+ */
+router.get('/:id/form-data', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: projectId } = req.params;
+
+  try {
+    // 1. Get the Competency Dictionary
+    //We join projects and competency_dictionaries to get the dictionary 'content'
+    const dictResult = await query(
+      `SELECT cd.content
+       FROM competency_dictionaries cd
+       JOIN projects p ON p.dictionary_id = cd.id
+       WHERE p.id = $1`,
+      [projectId]
+    );
+
+    const competencies = dictResult.rows[0]?.content?.competencies || [];
+
+    // 2. Get Global Simulation Methods linked to this project
+    const globalMethodsResult = await query(
+      `SELECT gsm.id, gsm.name
+       FROM global_simulation_methods gsm
+       JOIN projects_to_global_methods pgm ON pgm.method_id = gsm.id
+       WHERE pgm.project_id = $1`,
+      [projectId]
+    );
+
+    // 3. Get Project-Specific Simulation Methods
+    const projectMethodsResult = await query(
+      `SELECT psm.id, psm.name
+       FROM project_simulation_methods psm
+       WHERE psm.project_id = $1`,
+      [projectId]
+    );
+
+    const simulationMethods = [
+      ...globalMethodsResult.rows,
+      ...projectMethodsResult.rows
+    ];
+
+    // 4. Send all data to the frontend
+    res.status(200).json({
+      competencies,
+      simulationMethods,
+    });
+
+  } catch (error) {
+    console.error("Error fetching project form-data:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
  * (P16, U16) Get all reports for a specific project
  */
 router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, res) => {

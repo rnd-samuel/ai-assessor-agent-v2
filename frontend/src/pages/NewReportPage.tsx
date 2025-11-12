@@ -1,9 +1,19 @@
 // frontend/src/pages/NewReportPage.tsx
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import apiService from '../services/apiService';
+import apiService from '../services/apiService.ts';
 
-// (FIXED) 1. Updated the interface
+// Define data types
+interface Competency {
+  id: string;
+  name: string;
+}
+interface simulationMethod {
+  id: string;
+  name: string;
+}
+
+// Define the interface
 type FileStatus = 'uploading' | 'processing' | 'complete';
 interface UploadedFile {
   id: string;
@@ -12,21 +22,15 @@ interface UploadedFile {
   simulationMethod: string; // <-- This will store the dropdown value
 }
 
-// Mock data for competency list (from U25)
-const competencies = [
-  { id: 'comm', name: 'Communication' },
-  { id: 'ps', name: 'Problem Solving' },
-  { id: 'lead', name: 'Leadership' },
-];
-
-// (FIXED) 2. Moved FileListItem component OUTSIDE
-// This stops it from re-rendering and losing state
+// 2. Moved FileListItem component OUTSIDE
 const FileListItem = ({ 
   file, 
-  onMethodChange 
+  onMethodChange,
+  simulationMethods 
 }: { 
   file: UploadedFile, 
-  onMethodChange: (fileId: string, method: string) => void 
+  onMethodChange: (fileId: string, method: string) => void,
+  simulationMethods: simulationMethod[]
 }) => {
   return (
     <div className="p-3 bg-bg-medium rounded-md border border-border">
@@ -49,18 +53,17 @@ const FileListItem = ({
               onChange={(e) => onMethodChange(file.id, e.target.value)} // <-- Update state
             >
               <option value="">Select method...</option>
-              <option value="case-study">Case Study</option>
-              <option value="roleplay">Roleplay</option>
-              <option value="lgd">LGD</option>
-              <option value="bei">BEI</option>
-              <option value="in-tray">In-tray</option>
+              {simulationMethods.map(method => (
+                <option key={method.id} value={method.name}>
+                  {method.name}
+                </option>
+              ))}
             </select>
           </div>
         </div>
       ) : (
         // "Uploading/Processing" view with progress bar
         <div>
-          {/* ... (this part is unchanged) ... */}
           <div className="flex justify-between items-center">
             <p className="text-sm font-medium text-text-primary">{file.name}</p>
             <p className="text-sm text-text-muted capitalize">{file.status}...</p>
@@ -84,25 +87,53 @@ export default function NewReportPage() {
 
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isGeneratingDisabled, setIsGeneratingDisabled] = useState(true);
+
+  const [competencies, setCompetencies] = useState<Competency[]>([]);
+  const [simulationMethods, setSimulationMethods] = useState<SimulationMethod[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   
   const [globalTarget, setGlobalTarget] = useState('4');
-  const [specificTargets, setSpecificTargets] = useState<Record<string, string>>(() => {
-    const newTargets: Record<string, string> = {};
-    competencies.forEach(comp => {
-      newTargets[comp.id] = globalTarget;
-    });
-    return newTargets;
-  });
+  const [specificTargets, setSpecificTargets] = useState<Record<string, string>>({});
 
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
 
   useEffect(() => {
-    const newTargets: Record<string, string> = {};
-    competencies.forEach(comp => {
-      newTargets[comp.id] = globalTarget;
+    if (!projectId) return;
+
+    const fetchFormData = async () => {
+      setIsLoading(true);
+      try {
+        const response = await apiService.get(`/projects/${projectId}/form-data`);
+        const fetchedCompetencies = response.data.competencies || [];
+        setCompetencies(fetchedCompetencies);
+        setSimulationMethods(response.data.simulationMethods || []);
+
+        // Initialize targets based on fetched competencies
+        const newTargets: Record<string, string> = {};
+        fetchedCompetencies.forEach((comp: Competency) => {
+          newTargets[comp.id] = globalTarget;
+        });
+        setSpecificTargets(newTargets);
+
+      } catch (error) {
+        console.error("Failed to fetch project form data:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchFormData();
+  }, [projectId]);
+
+  useEffect(() => {
+    setSpecificTargets(prevTargets => {
+      const newTargets = { ...prevTargets };
+      competencies.forEach(comp => {
+        newTargets[comp.id] = globalTarget;
+      });
+      return newTargets;
     });
-    setSpecificTargets(newTargets);
-  }, [globalTarget]);
+  }, [globalTarget, competencies]);
 
   const handleSpecificTargetChange = (compId: string, value: string) => {
     setSpecificTargets(prev => ({
@@ -120,7 +151,7 @@ export default function NewReportPage() {
       id: `file-${Date.now()}-${file.name}`,
       name: file.name,
       status: 'uploading',
-      simulationMethod: '', // (FIXED) 3. Initialize with empty method
+      simulationMethod: '',
     }));
 
     setFiles(prev => [...prev, ...newFiles]);
@@ -136,7 +167,7 @@ export default function NewReportPage() {
     });
   };
   
-  // (FIXED) 4. Add handler to update the file's state
+  // 4. Add handler to update the file's state
   const handleMethodChange = (fileId: string, method: string) => {
     setFiles(prevFiles => 
       prevFiles.map(file => 
@@ -151,7 +182,9 @@ export default function NewReportPage() {
       return;
     }
     const allComplete = files.every(f => f.status === 'complete');
-    setIsGeneratingDisabled(!allComplete);
+    const allTagged = files.every(f => f.simulationMethod !== '');
+
+    setIsGeneratingDisabled(!allComplete || !allTagged);
   }, [files]);
 
   const handleGenerateReport = async () => {
@@ -163,7 +196,7 @@ export default function NewReportPage() {
       return;
     }
     
-    // (FIXED) We can now get the file methods from state
+    // We can now get the file methods from state
     const fileMethods = files.map(f => ({ 
       name: f.name, 
       method: f.simulationMethod 
@@ -177,6 +210,7 @@ export default function NewReportPage() {
         projectId,
         targetLevels: specificTargets,
         specificContext,
+        // We'll add file data here soon
       };
       
       console.log("Sending payload to /api/reports:", payload);
@@ -184,7 +218,7 @@ export default function NewReportPage() {
       const response = await apiService.post('/reports', payload);
       const { reportId } = response.data;
 
-      // (FIXED) Navigate to the correct, plural-path route
+      // Navigate to the correct, plural-path route
       navigate(`/reports/${reportId}`);
 
     } catch (error) {
@@ -230,13 +264,14 @@ export default function NewReportPage() {
                 onChange={(e) => handleFilesUpload(e.target.files!)} 
               />
               
-              {/* (FIXED) 5. Pass the handler to the child component */}
+              {/* FileListItem call */}
               <div id="file-list" className="mt-4 space-y-3">
                 {files.map(file => (
                   <FileListItem 
                     key={file.id} 
                     file={file} 
-                    onMethodChange={handleMethodChange} 
+                    onMethodChange={handleMethodChange}
+                    simulationMethods={simulationMethods} 
                   />
                 ))}
               </div>
@@ -267,6 +302,12 @@ export default function NewReportPage() {
 
               <div className="space-y-4 mt-6">
                 <label className="text-sm font-semibold text-text-primary mb-0 block border-b border-border pb-2">Specific Target Overrides</label>
+
+                {isLoading && <p className="text-sm text-text-muted">Loading competencies...</p>}
+
+                {!isLoading && competencies.length === 0 && (
+                  <p className="text-sm text-text-muted">No competencies found for this project. Please set one in the 'New Project' page.</p>
+                )}
                 
                 {competencies.map(comp => (
                   <div key={comp.id} className="flex items-center justify-between pt-4">
