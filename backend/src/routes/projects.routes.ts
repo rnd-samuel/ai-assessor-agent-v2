@@ -132,13 +132,17 @@ router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), a
  * Get the necessary data for filling out the "New Report" form.
  * This includes the project's competency dictionary and its simulation methods.
  */
-router.get('/:id/form-data', authenticateToken, async (req: AuthenticatedRequest, res) => {
+router.get('/:id/form-data', authenticateToken, async (req, res) => {
   const { id: projectId } = req.params;
+
+  if (!projectId || projectId === 'undefined' || projectId === '${project.id}') {
+    return res.status(400).send({ message: "Project ID is invalid." });
+  }
 
   try {
     // 1. Get the Competency Dictionary
     //We join projects and competency_dictionaries to get the dictionary 'content'
-    const dictResult = await query(
+    const dictQuery = await query(
       `SELECT cd.content
        FROM competency_dictionaries cd
        JOIN projects p ON p.dictionary_id = cd.id
@@ -146,10 +150,19 @@ router.get('/:id/form-data', authenticateToken, async (req: AuthenticatedRequest
       [projectId]
     );
 
-    const competencies = dictResult.rows[0]?.content?.competencies || [];
+    let competencies: { id: string, name: string }[] = [];
+    if (dictQuery.rows.length > 0) {
+      const dictionary = dictQuery.rows[0].content;
+      if (dictionary.kompetensi) {
+        competencies = dictionary.kompetensi.map((comp: any) => ({
+          id: comp.id || comp.namaKompetensi,
+          name: comp.namaKompetensi
+        }));
+      }
+    }
 
     // 2. Get Global Simulation Methods linked to this project
-    const globalMethodsResult = await query(
+    const globalMethodsQuery = await query(
       `SELECT gsm.id, gsm.name
        FROM global_simulation_methods gsm
        JOIN projects_to_global_methods pgm ON pgm.method_id = gsm.id
@@ -158,16 +171,16 @@ router.get('/:id/form-data', authenticateToken, async (req: AuthenticatedRequest
     );
 
     // 3. Get Project-Specific Simulation Methods
-    const projectMethodsResult = await query(
-      `SELECT psm.id, psm.name
-       FROM project_simulation_methods psm
-       WHERE psm.project_id = $1`,
+    const projectMethodsQuery = await query(
+      `SELECT id, name
+       FROM project_simulation_methods
+       WHERE project_id = $1`,
       [projectId]
     );
 
     const simulationMethods = [
-      ...globalMethodsResult.rows,
-      ...projectMethodsResult.rows
+      ...globalMethodsQuery.rows,
+      ...projectMethodsQuery.rows
     ];
 
     // 4. Send all data to the frontend
@@ -176,9 +189,9 @@ router.get('/:id/form-data', authenticateToken, async (req: AuthenticatedRequest
       simulationMethods,
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error fetching project form-data:", error);
-    res.status(500).send({ message: "Internal server error" });
+    res.status(500).send({ message: "Internal server error", detail: error.message });
   }
 });
 

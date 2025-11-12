@@ -1,16 +1,20 @@
 // frontend/src/pages/NewReportPage.tsx
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import apiService from '../services/apiService.ts';
+import apiService from '../services/apiService';
 
 // Define data types
 interface Competency {
   id: string;
   name: string;
 }
-interface simulationMethod {
+interface SimulationMethod {
   id: string;
   name: string;
+}
+interface FormDataResponse {
+  competencies :Competency[];
+  simulationMethods: SimulationMethod[];
 }
 
 // Define the interface
@@ -30,7 +34,7 @@ const FileListItem = ({
 }: { 
   file: UploadedFile, 
   onMethodChange: (fileId: string, method: string) => void,
-  simulationMethods: simulationMethod[]
+  simulationMethods: SimulationMethod[]
 }) => {
   return (
     <div className="p-3 bg-bg-medium rounded-md border border-border">
@@ -101,9 +105,9 @@ export default function NewReportPage() {
     if (!projectId) return;
 
     const fetchFormData = async () => {
-      setIsLoading(true);
       try {
-        const response = await apiService.get(`/projects/${projectId}/form-data`);
+        setIsLoading(true);
+        const response = await apiService.get<FormDataResponse>(`/projects/${projectId}/form-data`);
         const fetchedCompetencies = response.data.competencies || [];
         setCompetencies(fetchedCompetencies);
         setSimulationMethods(response.data.simulationMethods || []);
