@@ -1,5 +1,5 @@
 // frontend/src/pages/NewProjectPage.tsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import apiService from '../services/apiService';
 import { useNavigate } from 'react-router-dom';
 
@@ -11,6 +11,12 @@ type SectionId =
   | 'simulation' 
   | 'prompts' 
   | 'users';
+
+// Define the dictionary type
+interface CompetencyDictionary {
+  id: string,
+  name: string,
+}
 
 export default function NewProjectPage() {
   const navigate = useNavigate();
@@ -29,13 +35,15 @@ export default function NewProjectPage() {
 
   // --- State for form data ---
   const [projectName, setProjectName] = useState('');
-  // --- END NEW STATE ---
+  
+  // --- State for file uploads ---
+  const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [kbFiles, setKbFiles] = useState<File[]>([]);
+  const [simFiles, setSimFiles] = useState<File[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
 
-  const dictionaries = [
-    { id: 'a1b2c3d4-e5f6-7890-1234-56789abcdef0', name: 'Standard Leadership Dictionary (v2)' },
-    { id: 'd2', name: 'Graduate Tech Dictionary (v1)' }
-  ];
-  const [selectedDictionary, setSelectedDictionary] = useState(dictionaries[0]);
+  const [dictionaries, setDictionaries] = useState<CompetencyDictionary[]>([]);
+  const [selectedDictionary, setSelectedDictionary] = useState<CompetencyDictionary | null>(null);
 
   const users = [
     { id: 'u1', email: 'alice.johnson@example.com' },
@@ -60,6 +68,23 @@ export default function NewProjectPage() {
   // (P12) State for the prompt toggles
   const [competencyAnalysis, setCompetencyAnalysis] = useState(true);
   const [executiveSummary, setExecutiveSummary] = useState(true);
+
+  useEffect (() => {
+    const fetchDictionaries = async () => {
+      try {
+        const response = await apiService.get('/projects/available-dictionaries');
+        setDictionaries(response.data);
+        // Set the first dictionary as the default
+        if (response.data.length > 0) {
+          setSelectedDictionary(response.data[0]);
+        }
+      } catch (error) {
+        console.error("Failed to fetch dictionaries:", error);
+        alert("Error: Could not load dictionaries.");
+      }
+    };
+    fetchDictionaries();
+  }, []);
 
   // Helper to manage modals
   const openModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: true }));
@@ -86,18 +111,77 @@ export default function NewProjectPage() {
   };
 
   const handleCreateProject = async () => {
+    if (!projectName) {
+      alert("Please enter a project title.");
+      return;
+    }
+
+    // (NP-4.8) Check for required files
+    if (!templateFile) {
+      alert("Please upload a Report Template.");
+      setActiveSection('template');
+      return;
+    }
+
+    // Check for dictionary
+    if (!selectedDictionary) {
+      alert("Please select a Competency Dictionary.");
+      setActiveSection('dictionary');
+      return;
+    }
+
+    setIsUploading(true);
+
     try {
         const payload = {
             name: projectName,
-            dictionaryId: selectedDictionary.id,
+            dictionaryId: selectedDictionary?.id,
             userIds: Array.from(selectedUserIds),
             prompts: prompts
         };
 
-        // (FR-PROJ-001) Call the new endpoint
+        // (FR-PROJ-001) Call the endpoint to create the project record
         const response = await apiService.post('/projects', payload);
-
         const { projectId } = response.data;
+
+        console.log('Project created with ID:', projectId);
+
+        // (NP-4.2) Upload Report Template
+        console.log('Uploading template...');
+        const templateFormData = new FormData();
+        templateFormData.append('file', templateFile);
+        templateFormData.append('fileType', 'template');
+        await apiService.post(`/projects/${projectId}/upload`, templateFormData, {
+          headers: { 'Content-Type': 'multipart/form-data'},
+        });
+
+        // (NP-4.3) Upload Knowledge Base Files
+        if (kbFiles.length > 0) {
+          console.log(`Uploading ${kbFiles.length} KB files...`);
+          for (const file of kbFiles) {
+            const kbFormData = new FormData();
+            kbFormData.append('file', file);
+            kbFormData.append('fileType', 'knowledgeBase');
+            await apiService.post(`/projects/${projectId}/upload`, kbFormData, {
+              headers: { 'Content-Type': 'multipart/form-data' },
+            });
+          }
+        }
+
+        // (NP-4.5) Upload Simulation Method Files
+        if (simFiles.length > 0) {
+          console.log(`Uploading ${simFiles.length} Sim files...`);
+          for (const file of simFiles) {
+            const simFormData = new FormData();
+            simFormData.append('file', file);
+            simFormData.append('fileType', 'simulationMethod');
+            await apiService.post(`/projects/${projectId}/upload`, simFormData, {
+              headers: { 'Content-Type': 'multipart/form-data' },  
+            });
+          }
+        }
+
+        setIsUploading(false);
         alert('Project created successfully!');
 
         // (P14) Redirect to the new project's report dashboard
@@ -149,11 +233,13 @@ return (
               {/* (FIXED) This button is now wired up to the handleCreateProject function and enabled when projectName is not empty */}
               <button 
                 id="create-project-btn" 
-                className={`bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 transition-colors ${!projectName ? 'opacity-50 cursor-not-allowed' : 'hover:bg-primary-hover'}`}
+                className={`bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 transition-colors ${
+                  (!projectName || !selectedDictionary || isUploading) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-primary-hover'
+                }`}
                 disabled={!projectName}
                 onClick={handleCreateProject}
               >
-                Create Project
+                {isUploading ? 'Creating...' : 'Create Project'}
               </button>
             </div>
           </div>
@@ -176,9 +262,34 @@ return (
           {activeSection === 'template' && (
             <section id="section-template" className="max-w-3xl mx-auto space-y-6">
               <h2 className="text-xl font-semibold text-text-primary">1. Report Template</h2>
-              <div className="w-full border-2 border-dashed border-border rounded-lg bg-bg-light p-8 text-center cursor-pointer hover:border-primary">
+
+              {/* Hidden file input for template */}
+              <input
+                type="file"
+                id="template-file-input"
+                className="hidden"
+                accept=".docx"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length > 0) {
+                    setTemplateFile(e.target.files[0]);
+                  }
+                }}
+              />
+
+              {/* Uploader UI */}
+              <div
+                className="w-full border-2 border-dashed border-border rounded-lg bg-bg-light p-8 text-center cursor-pointer hover:border-primary"
+                onClick={() => document.getElementById('template-file-input')?.click()}
+              >
                 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-text-muted mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
+
+                {/* Show selected file name */}
+                {templateFile ? (
+                  <p className="text-sm font-semibold text-text-primary">{templateFile.name}</p>
+                ) : (
+                  <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
+                )}
+
                 <p className="text-xs text-text-muted mt-1">.docx format only</p>
               </div>
               {/* This is a placeholder, will be wired up later */}
@@ -192,15 +303,41 @@ return (
           {activeSection === 'knowledge' && (
             <section id="section-knowledge" className="max-w-3xl mx-auto space-y-6">
               <h2 className="text-xl font-semibold text-text-primary">2. Knowledge Base</h2>
-              <div className="w-full border-2 border-dashed border-border rounded-lg bg-bg-light p-8 text-center cursor-pointer hover:border-primary">
+
+              {/* Hidden file input for KB */}
+              <input
+                type="file"
+                id="kb-file-input"
+                className="hidden"
+                accept=".pdf,.docx,.txt"
+                multiple
+                onChange={(e) => {
+                  if (e.target.files) {
+                    setKbFiles(Array.from(e.target.files));
+                  }
+                }}
+              />
+              {/* Uploader UI */}
+              <div 
+                className="w-full border-2 border-dashed border-border rounded-lg bg-bg-light p-8 text-center cursor-pointer hover:border-primary"
+                onClick={() => document.getElementById('kb-file-input')?.click()}
+              >
                 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-text-muted mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                 <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
                 <p className="text-xs text-text-muted mt-1">.pdf, .docx, .txt</p>
               </div>
-              {/* This is a placeholder, will be wired up later */}
-              <div className="space-y-3 hidden">
-                <h3 className="text-base font-semibold text-text-primary">Uploaded Files</h3>
-              </div>
+
+              {/* --- NEW: Show list of selected files --- */}
+              {kbFiles.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-base font-semibold text-text-primary">Uploaded Files ({kbFiles.length})</h3>
+                  <ul className="list-disc list-inside space-y-1">
+                    {kbFiles.map((file, index) => (
+                      <li key={index} className="text-sm text-text-secondary">{file.name}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </section>
           )}
           
@@ -220,7 +357,7 @@ return (
                   onClick={() => setIsDictionaryOpen(!isDictionaryOpen)}
                   className="w-full rounded-md border border-border px-3 py-2 bg-bg-light shadow-sm text-sm text-left flex justify-between items-center"
                 >
-                  <span>{selectedDictionary.name || 'Select a dictionary...'}</span>
+                  <span>{selectedDictionary?.name || 'Select a dictionary...'}</span>
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`text-text-muted transition-transform ${isDictionaryOpen ? 'rotate-180' : ''}`}><path d="m6 9 6 6 6-6"/></svg>
                 </button>
 
@@ -261,7 +398,7 @@ return (
               </div>
 
               {/* Selected Dictionary View */}
-              {selectedDictionary.id && (
+              {selectedDictionary?.id && (
                 <div className="bg-bg-light rounded-lg border border-border p-4">
                   <div className="flex justify-between items-center">
                     <div>
@@ -324,11 +461,39 @@ return (
               {/* Upload New Method Data (P11) */}
               <div>
                 <label className="text-sm font-medium mb-1 block">Upload new simulation method data</label>
-                 <div className="w-full border-2 border-dashed border-border rounded-lg bg-bg-light p-8 text-center cursor-pointer hover:border-primary">
+                {/* --- NEW: Hidden file input for Sim --- */}
+                <input 
+                  type="file" 
+                  id="sim-file-input"
+                  className="hidden"
+                  accept=".pdf,.docx,.txt"
+                  multiple
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      setSimFiles(Array.from(e.target.files));
+                    }
+                  }}
+                />
+                 <div 
+                   className="w-full border-2 border-dashed border-border rounded-lg bg-bg-light p-8 text-center cursor-pointer hover:border-primary"
+                   onClick={() => document.getElementById('sim-file-input')?.click()}
+                 >
                     <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-text-muted mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                     <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
                     <p className="text-xs text-text-muted mt-1">.pdf, .docx, .txt</p>
                 </div>
+
+                {/* --- Show list of selected files --- */}
+                {simFiles.length > 0 && (
+                  <div className="space-y-2 mt-3">
+                    <h3 className="text-sm font-semibold text-text-primary">Uploaded Files ({simFiles.length})</h3>
+                    <ul className="list-disc list-inside space-y-1">
+                      {simFiles.map((file, index) => (
+                        <li key={index} className="text-sm text-text-secondary">{file.name}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
 
               {/* Add New Method Button (P11) */}
@@ -555,7 +720,7 @@ return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="w-full max-w-4xl bg-bg-light rounded-lg shadow-lg flex flex-col max-h-[90vh]">
             <div className="flex justify-between items-center p-6 border-b border-border">
-              <h3 className="text-lg font-semibold text-text-primary">{selectedDictionary.name || 'Competency Dictionary'}</h3>
+              <h3 className="text-lg font-semibold text-text-primary">{selectedDictionary?.name || 'Competency Dictionary'}</h3>
               <button className="text-text-muted hover:text-text-primary" onClick={() => closeModal('dictionary')}>&times;</button>
             </div>
             <div className="p-6 modal-body overflow-y-auto">

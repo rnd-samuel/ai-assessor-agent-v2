@@ -2,6 +2,7 @@
 import { Router, Request } from 'express';
 import { authenticateToken, authorizeRole } from '../middleware/auth.middleware';
 import { query } from '../services/db';
+import multer from 'multer';
 
 // Extend Request type to include 'user'
 interface AuthenticatedRequest extends Request {
@@ -10,6 +11,10 @@ interface AuthenticatedRequest extends Request {
     role: string;
   };
 }
+
+// Configure multer to store files in memory as buffers
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
 const router = Router();
 
@@ -28,7 +33,7 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
       projectsResult = await query(`
         SELECT p.id, p.name, p.created_at, COUNT(r.id) as report_count
         FROM projects p
-        LEFT JOIN reports r ON p.id = r.project_id
+        LEFT JOIN reports r ON p.id = r.project_id AND r.is_archived = false
         WHERE p.is_archived = false
         GROUP BY p.id
         ORDER BY p.created_at DESC
@@ -39,7 +44,7 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
         SELECT p.id, p.name, p.created_at, COUNT(r.id) as report_count
         FROM projects p
         JOIN project_users pu ON p.id = pu.project_id
-        LEFT JOIN reports r ON p.id = r.project_id AND r.creator_id = $1
+        LEFT JOIN reports r ON p.id = r.project_id AND r.creator_id = $1 AND r.is_archived = false
         WHERE pu.user_id = $1 AND p.is_archived = false
         GROUP BY p.id
         ORDER BY p.created_at DESC
@@ -196,37 +201,103 @@ router.get('/:id/form-data', authenticateToken, async (req, res) => {
 });
 
 /**
- * (P16, U16) Get all reports for a specific project
+ * (NP-4.2, 4.3, 4.5) Handle file uploads for a specific project
+ * This route expects 'multipart/form-data'
+ * It uses the 'upload.single('file')' middleware to process one file.
+ */
+router.post('/:id/upload', authenticateToken, authorizeRole('Admin', 'Project Manager'), upload.single('file'),
+  async (req, res) => {
+    const { id: projectId } = req.params;
+    const { fileType } = req.body;
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).send({ message: 'No file uploaded.' });
+    }
+
+    if (!fileType) {
+      return res.status(400).send({ message: 'Missing fileType.' });
+    }
+
+    console.log(`[File Upload] ProjectID: ${projectId}`);
+    console.log(`[File Upload] FileType: ${fileType}`);
+    console.log(`[File Upload] OriginalName: ${file.originalname}`);
+    console.log(`[File Upload] Size: ${file.size} bytes`);
+
+    try {
+      // --- This is where you will add GCS and BullMQ logic later ---
+      // TODO (Step 1): Upload file.buffer to Google Cloud Storage
+      // const gcsUrl = await uploadToGCS(file.buffer, file.originalname);
+
+      // TODO (Step 2): Save file metadata to the database
+      // await query(
+      //   "INSERT INTO project_files (project_id, file_name, gcs_url, file_type) VALUES ($1, $2, $3, $4)",
+      //   [projectId, file.originalname, gcsUrl, fileType]
+      // );
+      
+      // TODO (Step 3): If it's a KB file, queue an ingestion job
+      // if (fileType === 'knowledgeBase' || fileType === 'simulationMethod') {
+      //   await fileIngestionQueue.add('ingest-file', { projectId, gcsUrl });
+      // }
+
+      // For now, just send success
+      res.status(200).send({
+        message: 'File uploaded successfully (placeholder)',
+        filename: file.originalname,
+      });
+
+    } catch (error) {
+      console.error('File upload failed', error);
+      res.status(500).send({ message: 'Internal server error during file upload.' });
+    }
+  }
+)
+
+/**
+ * (P16, U16, RD-5.5) Get all reports for a specific project (with search)
  */
 router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const { id: projectId } = req.params;
   const userId = req.user?.userId;
   const userRole = req.user?.role;
+  const { search } = req.query; // <-- GET THE SEARCH QUERY
 
   try {
     let reportsResult;
+    let sqlQuery = '';
+    const params: any[] = [];
 
     if (userRole === 'Admin' || userRole === 'Project Manager') {
       // (P17) Admins/PMs see ALL reports for the project
-      reportsResult = await query(
-        `SELECT r.id, r.created_at, r.title, u.email as user_email, (r.creator_id = $1) as can_archive
+      sqlQuery = `
+         SELECT r.id, r.created_at, r.title, u.email as user_email, (r.creator_id = $1) as can_archive
          FROM reports r
          JOIN users u ON r.creator_id = u.id
          WHERE r.project_id = $2 AND r.is_archived = false
-         ORDER BY r.created_at DESC`,
-        [userId, projectId]
-      );
+      `;
+      params.push(userId, projectId);
     } else {
       // (U17) Users only see their OWN reports
-      reportsResult = await query(
-        `SELECT r.id, r.created_at, r.title, u.email as user_email, true as can_archive
+      sqlQuery = `
+         SELECT r.id, r.created_at, r.title, u.email as user_email, true as can_archive
          FROM reports r
          JOIN users u ON r.creator_id = u.id
          WHERE r.project_id = $1 AND r.creator_id = $2 AND r.is_archived = false
-         ORDER BY r.created_at DESC`,
-        [projectId, userId]
-      );
+      `;
+      params.push(projectId, userId);
     }
+
+    // --- THIS IS THE CRITICAL LOGIC ---
+    // Dynamically add the SEARCH filter
+    if (search && typeof search === 'string' && search.trim() !== '') {
+      sqlQuery += ` AND r.title ILIKE $${params.length + 1}`; // ILIKE is case-insensitive
+      params.push(`%${search.trim()}%`); // Add wildcards and trim whitespace
+    }
+    
+    sqlQuery += ' ORDER BY r.created_at DESC';
+
+    // Execute the final query
+    reportsResult = await query(sqlQuery, params);
 
     // Format the data for the frontend
     const reports = reportsResult.rows.map(r => ({
@@ -234,13 +305,89 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
       date: new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       title: r.title,
       user: r.user_email,
-      canArchive: r.can_archive // This is the boolean we calculated in the SQL query
+      canArchive: r.can_archive
     }));
 
     res.status(200).json(reports);
 
   } catch (error) {
     console.error("Error fetching reports:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (NP-4.4) Get all available competency dictionaries
+ * Used by the NewProjectPage to populate the dropdown
+ */
+router.get('/available-dictionaries', authenticateToken, async (req, res) => {
+  try {
+    const result = await query(
+      'SELECT id, name FROM competency_dictionaries ORDER BY created_at DESC'
+    );
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error('Error fetching dictionaries:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * (RD-5.5 / U20) Get all ARCHIVED reports for a specific project (with search)
+ */
+router.get('/:id/reports/archived', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: projectId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+  const { search } = req.query; // <-- GET THE SEARCH QUERY
+
+  try {
+    let reportsResult;
+    let sqlQuery = '';
+    const params: any[] = [];
+
+    if (userRole === 'Admin' || userRole === 'Project Manager') {
+      sqlQuery = `
+         SELECT r.id, r.created_at, r.title, u.email as user_email, (r.creator_id = $1) as can_archive
+         FROM reports r
+         JOIN users u ON r.creator_id = u.id
+         WHERE r.project_id = $2 AND r.is_archived = true
+      `;
+      params.push(userId, projectId);
+    } else {
+      sqlQuery = `
+         SELECT r.id, r.created_at, r.title, u.email as user_email, true as can_archive
+         FROM reports r
+         JOIN users u ON r.creator_id = u.id
+         WHERE r.project_id = $1 AND r.creator_id = $2 AND r.is_archived = true
+      `;
+      params.push(projectId, userId);
+    }
+
+    // --- THIS IS THE CRITICAL LOGIC ---
+    // Dynamically add the SEARCH filter
+    if (search && typeof search === 'string' && search.trim() !== '') {
+      sqlQuery += ` AND r.title ILIKE $${params.length + 1}`;
+      params.push(`%${search.trim()}%`);
+    }
+
+    sqlQuery += ' ORDER BY r.created_at DESC';
+    
+    // Execute the final query
+    reportsResult = await query(sqlQuery, params);
+    
+    const reports = reportsResult.rows.map(r => ({
+      id: r.id,
+      date: new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      title: r.title,
+      user: r.user_email,
+      canArchive: r.can_archive
+    }));
+
+    res.status(200).json(reports);
+
+  } catch (error) {
+    console.error("Error fetching archived reports:", error);
     res.status(500).send({ message: "Internal server error" });
   }
 });

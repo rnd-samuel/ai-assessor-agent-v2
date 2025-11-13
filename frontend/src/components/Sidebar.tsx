@@ -83,7 +83,7 @@ export default function Sidebar() {
               projects.map((project) => (
                 <Link
                   key={project.id}
-                  to={'/projects/${project.id}'}
+                  to={`/projects/${project.id}`}
                   className="flex items-center py-2.5 pr-3 pl-11 rounded-md text-sm font-medium text-text-secondary hover:bg-bg-medium hover:text-text-primary"
                 >
                   <span className="nav-text whitespace-nowrap overflow-hidden text-ellipsis">

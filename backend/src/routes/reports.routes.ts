@@ -55,4 +55,98 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
   }
 });
 
+/**
+ * (RD-5.5) Archive a Report
+ * We use PUT or PATCH for updates. Let's use PUT and a custom URL.
+ */
+router.put('/:id/archive', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+
+  try {
+    // Check if the user is allowed to archive this report
+    const reportResult = await query(
+      `SELECT r.creator_id, p.creator_id as project_creator_id
+       FROM reports r
+       JOIN projects p ON r.project_id = p.id
+       WHERE r.id = $1`,
+      [reportId]
+    );
+
+    if (reportResult.rows.length === 0) {
+      return res.status(404).send({ message: 'Report not found' });
+    }
+
+    const report = reportResult.rows[0];
+    const isReportCreator = report.creator_id === userId;
+    const isProjectCreator = report.project_creator_id === userId;
+    const isAdmin = userRole === 'Admin';
+
+    // (RD-5.5 / RD-5.4) A user can only archive their own report.
+    // (PD-3.5 logic) A PM/Admin who created the project can also archive.
+    if (!isReportCreator && !isProjectCreator && !isAdmin) {
+      return res.status(403).send({ message: 'You are not authorized to archive this report.' });
+    }
+
+    // Update the report
+    await query(
+      'UPDATE reports SET is_archived = true WHERE id = $1',
+      [reportId]
+    );
+
+    res.status(200).send({ message: 'Report archived successfully.' });
+
+  } catch (error) {
+    console.error('Error archiving report:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * (RD-5.5) Unarchive a Report
+ */
+router.put('/:id/unarchive', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+
+  try {
+    // Check if the user is allowed to unarchive this report
+    // We'll use the same authorization logic as archiving
+    const reportResult = await query(
+      `SELECT r.creator_id, p.creator_id as project_creator_id
+       FROM reports r
+       JOIN projects p ON r.project_id = p.id
+       WHERE r.id = $1`,
+      [reportId]
+    );
+
+    if (reportResult.rows.length === 0) {
+      return res.status(404).send({ message: 'Report not found' });
+    }
+
+    const report = reportResult.rows[0];
+    const isReportCreator = report.creator_id === userId;
+    const isProjectCreator = report.project_creator_id === userId;
+    const isAdmin = userRole === 'Admin';
+
+    if (!isReportCreator && !isProjectCreator && !isAdmin) {
+      return res.status(403).send({ message: 'You are not authorized to unarchive this report.' });
+    }
+
+    // Update the report
+    await query(
+      'UPDATE reports SET is_archived = false WHERE id = $1',
+      [reportId]
+    );
+
+    res.status(200).send({ message: 'Report unarchived successfully.' });
+
+  } catch (error) {
+    console.error('Error unarchiving report:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
 export default router;
