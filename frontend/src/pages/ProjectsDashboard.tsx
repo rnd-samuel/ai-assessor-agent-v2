@@ -1,8 +1,9 @@
 // frontend/src/pages/ProjectsDashboard.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useUserStore } from '../state/userStore';
 import apiService from '../services/apiService';
+import { useToastStore } from '../state/toastStore';
 
 // Define the shape of a Project (matches our new API response)
 interface Project {
@@ -19,23 +20,34 @@ export default function ProjectsDashboard() {
   
   // --- STATE ---
   const [projects, setProjects] = useState<Project[]>([]);
-  const [archivedProjects, _setArchivedProjects] = useState<Project[]>([]);
+  const [archivedProjects, setArchivedProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showingArchived, setShowingArchived] = useState(false); //P4
   const [modals, setModals] = useState({ archive: false, unarchive: false });
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set()); //P3
 
+  // State for single-project archive and toasts
+  const [projectToArchive, setProjectToArchive] = useState<string | null>(null);
+  const [projectToUnarchive, setProjectToUnarchive] = useState<string | null>(null);
+  const addToast = useToastStore((state) => state.addToast);
+
+  // State for Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const debounceTimeout = useRef<number | null>(null);
+
   // --- DATA FETCHING (NEW) ---
   useEffect(() => {
     // This function runs once when the component loads
-    fetchProjects();
+    fetchProjects(searchQuery);
   }, []); // The empty array [] means it only runs once
 
-  const fetchProjects = async () => {
+  const fetchProjects = async (currentSearch: string = searchQuery) => {
     setIsLoading(true);
     try {
         // (U9) Use our apiService to call the protected endpoint
-        const response = await apiService.get('/projects');
+        const response = await apiService.get('/projects', {
+          params: { search: currentSearch }
+        });
         setProjects(response.data);
     } catch (error) {
         console.error("Failed to fetch projects:", error);
@@ -44,16 +56,101 @@ export default function ProjectsDashboard() {
     }
   };
 
-  // We'll wire this up later
-  // @ts-ignore: This is a placeholder for a future feature
-  const _fetchArchivedProjects = async () => {
-    // const response = await apiService.get('/projects/archived');
-    // setArchivedProjects(response.data);
+  const fetchArchivedProjects = async (currentSearch: string = searchQuery) => {
+    setIsLoading(true);
+    try {
+        // (PD-3.7) Call the new endpoint
+        const response = await apiService.get('/projects/archived', {
+          params: { search: currentSearch }
+        });
+        setArchivedProjects(response.data);
+    } catch (error) {
+        console.error("Failed to fetch archived projects:", error);
+    } finally {
+        setIsLoading(false);
+    }
   };
+
+  // Function to handle archive API call
+  const handleArchive = async () => {
+    const idsToArchive: string[] = [];
+    if (projectToArchive) {
+      idsToArchive.push(projectToArchive);
+    } else if (selectedProjects.size > 0) {
+      idsToArchive.push(...Array.from(selectedProjects));
+    } else {
+      closeModal('archive');
+      return;
+    }
+
+    try {
+      for (const id of idsToArchive) {
+        await apiService.put(`/projects/${id}/archive`);
+      }
+
+      // Update UI
+      addToast(`Successfully archived ${idsToArchive.length} project(s).`, 'success');
+
+      // (PD-3.5) Refetch the projects list to show the change
+      fetchProjects(searchQuery);
+
+      // Clean up state
+      closeModal('archive');
+      setSelectedProjects(new Set());
+
+    } catch (error: any) {
+      console.error("Failed to archive project(s):", error);
+      const message = error.response?.data?.message || "Could not archive project(s).";
+      addToast(`Error: ${message}`, 'error');
+    }
+  };
+
+  // --- NEW: Function to handle the actual UNarchive API call ---
+  const handleUnarchive = async () => {
+    const idsToUnarchive: string[] = [];
+    if (projectToUnarchive) {
+      // Case 1: Unarchiving a single project
+      idsToUnarchive.push(projectToUnarchive);
+    } else if (selectedProjects.size > 0) {
+      // Case 2: Unarchiving a batch
+      idsToUnarchive.push(...Array.from(selectedProjects));
+    } else {
+      closeModal('unarchive');
+      return;
+    }
+
+    try {
+      for (const id of idsToUnarchive) {
+        await apiService.put(`/projects/${id}/unarchive`);
+      }
+
+      addToast(`Successfully unarchived ${idsToUnarchive.length} project(s).`, 'success');
+      
+      // (PD-3.7) Refetch the ARCHIVED list to show the change
+      fetchArchivedProjects(searchQuery);
+      
+      closeModal('unarchive');
+      setSelectedProjects(new Set());
+      // projectToUnarchive is cleared by closeModal
+      
+    } catch (error: any) {
+      console.error("Failed to unarchive project(s):", error);
+      const message = error.response?.data?.message || "Could not unarchive project(s).";
+      addToast(`Error: ${message}`, 'error');
+    }
+  };  
   
   // Real modal handlers (FIXED)
   const openModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: true }));
-  const closeModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: false }));
+  const closeModal = (modal: keyof typeof modals) => {
+    setModals(prev => ({ ...prev, [modal]: false }));
+    if (modal === 'archive') {
+      setProjectToArchive(null);
+    }
+    if (modal === 'unarchive') { // <-- ADD THIS BLOCK
+      setProjectToUnarchive(null);
+    }
+  };
 
   // (U10) Mock handler for row click
   const navigateToReport = (projectId: string) => {
@@ -102,6 +199,23 @@ export default function ProjectsDashboard() {
               type="text"
               placeholder={showingArchived ? 'Search archived projects...' : 'Search projects...'}
               className="w-full rounded-md border border-border pl-9 pr-3 py-2 bg-bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+              value={searchQuery}
+              onChange={(e) => {
+                const newQuery = e.target.value;
+                setSearchQuery(newQuery);
+
+                if (debounceTimeout.current) {
+                  clearTimeout(debounceTimeout.current);
+                }
+
+                debounceTimeout.current = window.setTimeout(() => {
+                  if (showingArchived) {
+                    fetchArchivedProjects(newQuery);
+                  } else {
+                    fetchProjects(newQuery);
+                  }
+                }, 500)
+              }}
             />
           </div>
 
@@ -109,8 +223,15 @@ export default function ProjectsDashboard() {
           {(role === 'Project Manager' || role === 'Admin') && (
             <button
               onClick={() => {
-                setShowingArchived(!showingArchived);
+                const newShowArchived = !showingArchived;
+                setShowingArchived(newShowArchived);
                 setSelectedProjects(new Set()); // Clear selection on view change
+
+                if (newShowArchived) {
+                  fetchArchivedProjects(searchQuery);
+                } else {
+                  fetchProjects(searchQuery);
+                }
               }}
               className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors"
             >
@@ -179,9 +300,11 @@ export default function ProjectsDashboard() {
             {!isLoading && currentProjects.length === 0 && (
                 <tr>
                     <td colSpan={5} className="p-12 text-center text-text-muted">
-                        {showingArchived
-                          ? "No archived projects found."
-                          : (role === 'User'
+                        {searchQuery.length > 0 ? (
+                          `No projects found matching "${searchQuery}".`
+                        ) : showingArchived ? (
+                          "No archived projects found."
+                        ) : (role === 'User'
                             ? "You have not been invited to any projects."
                             : "No active projects found. Try creating one!")
                         }
@@ -211,15 +334,21 @@ export default function ProjectsDashboard() {
                         <td className="p-3 pr-6 text-right">
                             {showingArchived ? (
                                 <button
-                                  className="text-xs text-text-secondary hover:text-info"
-                                  onClick={() => openModal('unarchive')}
+                                  className={`text-xs ${project.canArchive ? 'text-text-secondary hover:text-info' : 'text-text-muted/70 cursor-not-allowed'}`}
+                                  onClick={project.canArchive ? () => {
+                                    setProjectToUnarchive(project.id);
+                                    openModal('unarchive');
+                                  } : undefined}
                                 >
                                     Unarchive
                                 </button>
                             ) : (
                                 <button
                                   className={`text-xs ${project.canArchive ? 'text-text-secondary hover:text-error' : 'text-text-muted/70 cursor-not-allowed'}`}
-                                  onClick={project.canArchive ? () => openModal('archive') : undefined}
+                                  onClick={project.canArchive ? () => {
+                                    setProjectToArchive(project.id);
+                                    openModal('archive')
+                                   } : undefined}
                                   disabled={!project.canArchive}
                                 >
                                     Archive
@@ -250,7 +379,7 @@ export default function ProjectsDashboard() {
               <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('archive')}>
                 Cancel
               </button>
-              <button className="bg-error text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-red-700" onClick={() => closeModal('archive')}>
+              <button className="bg-error text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-red-700" onClick={handleArchive}>
                 Archive
               </button>
             </div>
@@ -273,7 +402,7 @@ export default function ProjectsDashboard() {
               <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('unarchive')}>
                 Cancel
               </button>
-              <button className="bg-info text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-blue-700" onClick={() => closeModal('unarchive')}>
+              <button className="bg-info text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-blue-700" onClick={handleUnarchive}>
                 Unarchive
               </button>
             </div>

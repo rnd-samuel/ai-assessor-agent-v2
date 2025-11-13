@@ -333,10 +333,13 @@ export default function ReportsDashboard() {
                 {!isLoading && currentReports.length === 0 && (
                   <tr>
                     <td colSpan={5} className="p-12 text-center text-text-muted">
-                      {showingArchived
-                        ? "No archived reports found."
-                        : "No reports found for this project. Try creating one!"
-                      }
+                      {searchQuery.length > 0 ? (
+                        `No reports found matching "${searchQuery}".`
+                      ) : showingArchived ? (
+                        "No archived reports found."
+                      ) : (
+                        "No reports found for this project. Try creating one!"
+                      )}
                     </td>
                   </tr>
                 )}

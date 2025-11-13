@@ -18,47 +18,66 @@ const upload = multer({ storage: storage });
 
 const router = Router();
 
-// --- (FR-PROJ-002) Get Project List ---
+// --- (FR-PROJ-002 / PD-3.4) Get Project List (with search) ---
 // This route is protected. A user MUST be logged in to see it.
 router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const userId = req.user?.userId;
   const userRole = req.user?.role;
+  const { search } = req.query; // <-- 1. GET THE SEARCH QUERY
 
   try {
     let projectsResult;
+    // 2. Base query and parameters
+    let sqlQuery = '';
+    const params: any[] = [];
 
     if (userRole === 'Admin') {
-      // Admins/PMs who CREATE projects see all of them (P17)
-      // We also join to count reports.
-      projectsResult = await query(`
-        SELECT p.id, p.name, p.created_at, COUNT(r.id) as report_count
+      sqlQuery = `
+        SELECT p.id, p.name, p.created_at, p.creator_id, COUNT(r.id) as report_count
         FROM projects p
         LEFT JOIN reports r ON p.id = r.project_id AND r.is_archived = false
         WHERE p.is_archived = false
-        GROUP BY p.id
-        ORDER BY p.created_at DESC
-      `);
+      `;
     } else {
-      // 'Users' only see projects they are invited to (U9)
-      projectsResult = await query(`
-        SELECT p.id, p.name, p.created_at, COUNT(r.id) as report_count
+      sqlQuery = `
+        SELECT p.id, p.name, p.created_at, p.creator_id, COUNT(r.id) as report_count
         FROM projects p
         JOIN project_users pu ON p.id = pu.project_id
         LEFT JOIN reports r ON p.id = r.project_id AND r.creator_id = $1 AND r.is_archived = false
         WHERE pu.user_id = $1 AND p.is_archived = false
-        GROUP BY p.id
-        ORDER BY p.created_at DESC
-      `, [userId]);
+      `;
+      params.push(userId);
     }
 
-    // Format the data for the frontend
-    const projects = projectsResult.rows.map(p => ({
-      id: p.id,
-      date: new Date(p.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      name: p.name,
-      reports: parseInt(p.report_count, 10) || 0,
-      canArchive: userRole === 'Admin' || userRole === 'Project Manager' // (P3)
-    }));
+    // 3. Dynamically add the SEARCH filter
+    if (search && typeof search === 'string' && search.trim() !== '') {
+      // Both queries already have a WHERE clause, so we can always safely add AND
+      sqlQuery += ' AND'; 
+      sqlQuery += ` p.name ILIKE $${params.length + 1}`;
+      params.push(`%${search.trim()}%`);
+    }
+
+    sqlQuery += ' GROUP BY p.id ORDER BY p.created_at DESC';
+
+    // 4. Execute the final query
+    projectsResult = await query(sqlQuery, params);
+
+    // 5. Format the data (this logic is now more complex, so we update it)
+    const projects = projectsResult.rows.map(p => {
+      const reportCount = parseInt(p.report_count, 10) || 0;
+      const isCreator = p.creator_id === userId;
+      
+      return {
+        id: p.id,
+        date: new Date(p.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        name: p.name,
+        reports: reportCount,
+        canArchive: (
+          (userRole === 'Admin' || isCreator) && // User is Admin OR project creator
+          reportCount === 0 // AND project has 0 reports
+        )
+      };
+    });
 
     res.status(200).json(projects);
 
@@ -389,6 +408,158 @@ router.get('/:id/reports/archived', authenticateToken, async (req: Authenticated
   } catch (error) {
     console.error("Error fetching archived reports:", error);
     res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (PD-3.5) Archive a Project
+ */
+router.put('/:id/archive', authenticateToken, authorizeRole('Admin', 'Project Manager'), async (req: AuthenticatedRequest, res) => {
+  const { id: projectId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+
+  try {
+    // 1. Get project creator and report count
+    const projectResult = await query(
+      `SELECT 
+         creator_id, 
+         (SELECT COUNT(*) FROM reports WHERE project_id = $1) as report_count 
+       FROM projects 
+       WHERE id = $1`,
+      [projectId]
+    );
+
+    if (projectResult.rows.length === 0) {
+      return res.status(404).send({ message: 'Project not found' });
+    }
+
+    const project = projectResult.rows[0];
+    const reportCount = parseInt(project.report_count, 10);
+    const isCreator = project.creator_id === userId;
+    const isAdmin = userRole === 'Admin';
+
+    // 2. Enforce User Story PD-3.5 rules
+    if (!isAdmin && !isCreator) {
+      return res.status(403).send({ message: 'Forbidden: Only the project creator or an Admin can archive.' });
+    }
+    if (reportCount > 0) {
+      return res.status(400).send({ message: 'Bad Request: Cannot archive a project that has reports.' });
+    }
+
+    // 3. Update the project
+    await query(
+      'UPDATE projects SET is_archived = true WHERE id = $1',
+      [projectId]
+    );
+
+    res.status(200).send({ message: 'Project archived successfully.' });
+
+  } catch (error) {
+    console.error('Error archiving project:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * (PD-3.7) Get all ARCHIVED projects (with search)
+ */
+router.get('/archived', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+  const { search } = req.query; // <-- 1. GET THE SEARCH QUERY
+
+  try {
+    let projectsResult;
+    // 2. Base query and parameters
+    let sqlQuery = '';
+    const params: any[] = [];
+
+    if (userRole === 'Admin') {
+      sqlQuery = `
+        SELECT p.id, p.name, p.created_at, p.creator_id, 0 as report_count
+        FROM projects p
+        WHERE p.is_archived = true
+      `;
+    } else {
+      sqlQuery = `
+        SELECT p.id, p.name, p.created_at, p.creator_id, 0 as report_count
+        FROM projects p
+        JOIN project_users pu ON p.id = pu.project_id
+        WHERE pu.user_id = $1 AND p.is_archived = true
+      `;
+      params.push(userId);
+    }
+
+    // 3. Dynamically add the SEARCH filter
+    if (search && typeof search === 'string' && search.trim() !== '') {
+      // Both queries already have a WHERE clause, so we can always safely add AND
+      sqlQuery += ' AND';
+      sqlQuery += ` p.name ILIKE $${params.length + 1}`;
+      params.push(`%${search.trim()}%`);
+    }
+    
+    sqlQuery += ' GROUP BY p.id ORDER BY p.created_at DESC';
+
+    // 4. Execute the final query
+    projectsResult = await query(sqlQuery, params);
+
+    // 5. Format the data
+    const projects = projectsResult.rows.map(p => ({
+      id: p.id,
+      date: new Date(p.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      name: p.name,
+      reports: 0, 
+      canArchive: (userRole === 'Admin' || p.creator_id === userId)
+    }));
+
+    res.status(200).json(projects);
+
+  } catch (error) {
+    console.error("Error fetching archived projects:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (PD-3.7) Unarchive a Project
+ */
+router.put('/:id/unarchive', authenticateToken, authorizeRole('Admin', 'Project Manager'), async (req: AuthenticatedRequest, res) => {
+  const { id: projectId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+
+  try {
+    // 1. Get project creator
+    const projectResult = await query(
+      `SELECT creator_id FROM projects WHERE id = $1`,
+      [projectId]
+    );
+
+    if (projectResult.rows.length === 0) {
+      return res.status(404).send({ message: 'Project not found' });
+    }
+
+    const project = projectResult.rows[0];
+    const isCreator = project.creator_id === userId;
+    const isAdmin = userRole === 'Admin';
+
+    // 2. Enforce User Story PD-3.7 rules (only creator or Admin)
+    if (!isAdmin && !isCreator) {
+      return res.status(403).send({ message: 'Forbidden: Only the project creator or an Admin can unarchive.' });
+    }
+
+    // 3. Update the project
+    await query(
+      'UPDATE projects SET is_archived = false WHERE id = $1',
+      [projectId]
+    );
+
+    res.status(200).send({ message: 'Project unarchived successfully.' });
+
+  } catch (error) {
+    console.error('Error unarchiving project:', error);
+    res.status(500).send({ message: 'Internal server error' });
   }
 });
 
