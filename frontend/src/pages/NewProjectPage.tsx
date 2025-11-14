@@ -18,6 +18,12 @@ interface CompetencyDictionary {
   name: string,
 }
 
+// Define the User type
+interface User {
+  id: string;
+  email: string;
+}
+
 export default function NewProjectPage() {
   const navigate = useNavigate();
   // (P6) State to manage the active section/tab
@@ -33,6 +39,10 @@ export default function NewProjectPage() {
   // --- State for interactive dropdowns ---
   const [isDictionaryOpen, setIsDictionaryOpen] = useState(false);
 
+  // --- State for Simulation Methods (NP-4.5) ---
+  const [availableSimMethods, setAvailableSimMethods] = useState<{id: string, name: string}[]>([]);
+  const [selectedSimMethodIds, setSelectedSimMethodIds] = useState<Set<string>>(new Set());
+
   // --- State for form data ---
   const [projectName, setProjectName] = useState('');
   
@@ -45,10 +55,7 @@ export default function NewProjectPage() {
   const [dictionaries, setDictionaries] = useState<CompetencyDictionary[]>([]);
   const [selectedDictionary, setSelectedDictionary] = useState<CompetencyDictionary | null>(null);
 
-  const users = [
-    { id: 'u1', email: 'alice.johnson@example.com' },
-    { id: 'u2', email: 'bob.smith@example.com' }
-  ];
+  const [users, setUsers] = useState<User[]>([]);
   const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
 
   const [prompts, setPrompts] = useState({
@@ -69,22 +76,32 @@ export default function NewProjectPage() {
   const [competencyAnalysis, setCompetencyAnalysis] = useState(true);
   const [executiveSummary, setExecutiveSummary] = useState(true);
 
-  useEffect (() => {
-    const fetchDictionaries = async () => {
+// --- NEW: Fetch dictionaries AND methods on page load ---
+  useEffect(() => {
+    const fetchInitialData = async () => {
       try {
-        const response = await apiService.get('/projects/available-dictionaries');
-        setDictionaries(response.data);
-        // Set the first dictionary as the default
-        if (response.data.length > 0) {
-          setSelectedDictionary(response.data[0]);
+        // Fetch Dictionaries
+        const dictResponse = await apiService.get('/projects/available-dictionaries');
+        setDictionaries(dictResponse.data);
+        if (dictResponse.data.length > 0) {
+          setSelectedDictionary(dictResponse.data[0]);
         }
+
+        // Fetch Simulation Methods
+        const simResponse = await apiService.get('/projects/available-simulation-methods');
+        setAvailableSimMethods(simResponse.data);
+
+        // Fetch users
+        const userResponse = await apiService.get('/projects/available-users');
+        setUsers(userResponse.data);
+
       } catch (error) {
-        console.error("Failed to fetch dictionaries:", error);
-        alert("Error: Could not load dictionaries.");
+        console.error("Failed to fetch initial data:", error);
+        alert("Error: Could not load project data.");
       }
     };
-    fetchDictionaries();
-  }, []);
+    fetchInitialData();
+  }, []); // The empty array [] means this runs once on load
 
   // Helper to manage modals
   const openModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: true }));
@@ -137,7 +154,8 @@ export default function NewProjectPage() {
             name: projectName,
             dictionaryId: selectedDictionary?.id,
             userIds: Array.from(selectedUserIds),
-            prompts: prompts
+            prompts: prompts,
+            simulationMethodIds: Array.from(selectedSimMethodIds)
         };
 
         // (FR-PROJ-001) Call the endpoint to create the project record
@@ -432,7 +450,11 @@ return (
                   onClick={() => setIsSimOpen(!isSimOpen)}
                   className="w-full rounded-md border border-border px-3 py-2 bg-bg-light shadow-sm text-sm text-left flex justify-between items-center"
                 >
-                  <span>Select methods...</span>
+                  <span>
+                    {selectedSimMethodIds.size === 0
+                      ? 'Select methods...'
+                      : `${selectedSimMethodIds.size} method(s) selected`}
+                  </span>
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`text-text-muted transition-transform ${isSimOpen ? 'rotate-180' : ''}`}><path d="m6 9 6 6 6-6"/></svg>
                 </button>
 
@@ -451,8 +473,30 @@ return (
                     </div>
                     {/* Options (Mocked) */}
                     <ul className="max-h-60 overflow-y-auto p-2 text-sm space-y-1">
-                      <li><label className="flex items-center gap-2 p-2 rounded-md hover:bg-bg-medium cursor-pointer"><input type="checkbox" className="w-4 h-4 rounded-sm border-border accent-primary" /> Case Study</label></li>
-                      <li><label className="flex items-center gap-2 p-2 rounded-md hover:bg-bg-medium cursor-pointer"><input type="checkbox" className="w-4 h-4 rounded-sm border-border accent-primary" /> Roleplay</label></li>
+                      {availableSimMethods
+                        .filter(m => m.name.toLowerCase().includes(simSearch.toLowerCase()))
+                        .map(method => (
+                          <li key={method.id}>
+                            <label className="flex items-center gap-2 p-2 rounded-md hover:bg-bg-medium cursor-pointer">
+                              <input
+                                type="checkbox"
+                                className="w-4 h-4 rounded-sm border-border accent-primary"
+                                checked={selectedSimMethodIds.has(method.id)}
+                                onChange={() => {
+                                  const newSet = new Set(selectedSimMethodIds);
+                                  if (newSet.has(method.id)) {
+                                    newSet.delete(method.id);
+                                  } else {
+                                    newSet.add(method.id);
+                                  }
+                                  setSelectedSimMethodIds(newSet);
+                                }}
+                              />
+                              {method.name}
+                            </label>
+                          </li>
+                        ))
+                      }
                     </ul>
                   </div>
                 )}

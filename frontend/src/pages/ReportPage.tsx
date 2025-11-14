@@ -1,7 +1,27 @@
 // frontend/src/pages/ReportPage.tsx
-import { useState, useEffect, useRef } from 'react'; // <-- Removed unused ReactNode
+import { useState, useEffect, useRef } from 'react';
+import { useParams } from 'react-router-dom';
+import apiService from '../services/apiService';
+import { useToastStore } from '../state/toastStore';
 
-// --- Types and Helper Components ---
+// Define data structures
+interface EvidenceCard {
+  id: string;
+  competency: string;
+  level: string;
+  kb: string;
+  quote: string;
+  source: string;
+  reasoning: string;
+}
+
+interface ReportData {
+  title: string;
+  status: 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  evidence: EvidenceCard[];
+  // rawFiles: any[]; // TODO: Add later
+}
+
 type AnalysisTab = 'evidence' | 'competency' | 'summary';
 type RawTextTab = 'case-study' | 'roleplay';
 type ModalKey = 
@@ -71,6 +91,13 @@ const FilterButton = () => {
 
 export default function ReportPage() {
   // --- STATE HOOKS ---
+  const { id: reportId } = useParams(); // Get reportId from URL
+
+  // State for data, loading, and errors
+  const [isLoading, setIsLoading] = useState(true);
+  const [reportData, setReportData] = useState<ReportData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>('evidence');
   const [rawTextTab, setRawTextTab] = useState<RawTextTab>('case-study');
   const [showLeftPanel, setShowLeftPanel] = useState(true);
@@ -91,6 +118,10 @@ export default function ReportPage() {
   const [isViewOnly, _setIsViewOnly] = useState(false);
   const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
 
+  // State for deletion and toasts
+  const [evidenceToDelete, setEvidenceToDelete] = useState<string | null>(null);
+  const addToast = useToastStore((state) => state.addToast);
+
   // --- REFS ---
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<HTMLDivElement>(null);
@@ -100,7 +131,38 @@ export default function ReportPage() {
 
   // --- MODAL HELPERS ---
   const openModal = (modal: ModalKey) => setModals(prev => ({ ...prev, [modal]: true }));
-  const closeModal = (modal: ModalKey) => setModals(prev => ({ ...prev, [modal]: false }));
+  const closeModal = (modal: ModalKey) => {
+    setModals(prev => ({ ...prev, [modal]: false }));
+    // --- NEW: Clear deletion state on close ---
+    if (modal === 'deleteEvidence') {
+      setEvidenceToDelete(null);
+    }
+  };
+
+  // Data Fetching Function
+  useEffect(() => {
+    if (!reportId) {
+      setError("No report ID found in the URL.");
+      setIsLoading(false);
+      return;
+    }
+
+    const fetchReportData = async() => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        const response = await apiService.get<ReportData>(`/reports/${reportId}/data`);
+        setReportData(response.data);
+      } catch (err: any) {
+        console.error("Failed to fetch report data:", err);
+        setError(err.response?.data?.message || "An unknown error occurred.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchReportData();
+  }, [reportId]);
 
   // --- PAGE LOGIC ---
   const saveReport = () => {
@@ -123,6 +185,41 @@ export default function ReportPage() {
     setActiveEvidenceId(evidenceId);
     setRawTextTab(tabName);
   };
+
+  // --- NEW: Function to delete an evidence card ---
+  const handleDeleteEvidence = async () => {
+    if (!evidenceToDelete) return; // Safety check
+
+    try {
+      // (RP-7.9) Call the new backend endpoint
+      await apiService.delete(`/reports/evidence/${evidenceToDelete}`);
+
+      // On success, update the frontend state manually
+      // This is better than a full page reload
+      setReportData(prevData => {
+        if (!prevData) return null;
+        
+        // Filter out the deleted evidence card
+        const updatedEvidence = prevData.evidence.filter(
+          (ev) => ev.id !== evidenceToDelete
+        );
+
+        return {
+          ...prevData,
+          evidence: updatedEvidence
+        };
+      });
+
+      addToast("Evidence deleted successfully.", 'success');
+
+    } catch (error) {
+      console.error("Failed to delete evidence:", error);
+      addToast("Error: Could not delete evidence.", 'error');
+    } finally {
+      // Always close the modal and clear the state
+      closeModal('deleteEvidence');
+    }
+  };
   
   // Effect for highlighting
   useEffect(() => {
@@ -142,7 +239,7 @@ export default function ReportPage() {
     }
   }, [activeEvidenceId, rawTextTab]);
 
-  // (FIXED) Resizable Panel & Show/Hide Logic (U32)
+  // Resizable Panel & Show/Hide Logic (U32)
   useEffect(() => {
     const handle = handleRef.current;
     const leftPanel = leftPanelRef.current;
@@ -209,6 +306,188 @@ export default function ReportPage() {
     };
   }, [showLeftPanel, showRightPanel]);
 
+  // Helper for rendering evidence cards
+  const renderEvidenceCard = (evidence: EvidenceCard) => {
+    const cardId = evidence.id;
+    const isActive = activeEvidenceId === cardId;
+    const reasonVisible = evidenceCardReason === cardId;
+
+    return (
+      <div
+        key={cardId}
+        className={`w-full rounded-lg shadow-md bg-bg-light border ${isActive ? 'border-primary' : 'border-border'} ${!isViewOnly ? 'cursor-pointer' : ''}`}
+        onClick={() => !isViewOnly && highlightEvidence(evidence.id, evidence.source.toLowerCase() as RawTextTab)} // TODO: Make source mapping robust
+      >
+        {reasonVisible ? (
+          <div className="p-4">
+            <h4 className="text-sm font-semibold mb-2">AI Reasoning</h4>
+            <p className="text-sm text-text-secondary bg-bg-medium p-3 rounded-md">{evidence.reasoning}</p>
+          </div>
+        ) : (
+          <div>
+            <div className="p-4 border-b border-border">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-semibold">Level {evidence.level}</span>
+                <p className="text-sm font-medium text-text-primary leading-snug">{evidence.kb}</p>
+              </div>
+              <p className="text-xs text-text-muted">Competency: {evidence.competency}</p>
+            </div>
+            <div className="p-4">
+              <blockquote className="border-l-4 border-primary pl-4 text-sm italic">"{evidence.quote}"</blockquote>
+              <p className="text-xs text-text-muted mt-2">Source: {evidence.source}</p>
+            </div>
+          </div>
+        )}
+        <div className="p-2 border-t border-border flex items-center gap-1">
+          <button className="text-text-secondary rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium" onClick={(e) => { e.stopPropagation(); setEvidenceCardReason(prev => prev === cardId ? null : cardId); }}>
+            {reasonVisible ? 'Hide Reasoning' : 'See Reasoning'}
+          </button>
+          <button disabled={isViewOnly} onClick={(e) => { e.stopPropagation(); openModal('changeEvidence'); setHighlightingEvidence(true); }} className="text-text-secondary rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium">Change</button>
+          <button 
+            disabled={isViewOnly} 
+            onClick={(e) => {
+              e.stopPropagation();
+              setEvidenceToDelete(cardId);
+              openModal('deleteEvidence'); 
+            }} 
+            className="text-error/80 rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // Helper for rendering main content based on status
+  const renderAnalysisContent = () => {
+    if (isLoading) {
+      return (
+        <div className="p-6 text-center text-text-muted">
+          Loading report data...
+        </div>
+      );
+    }
+
+    if (error) {
+      return (
+        <div className="p-6 text-center text-error">
+          <strong>Error:</strong> {error}
+        </div>
+      );
+    }
+
+    if (!reportData) {
+      return (
+        <div className="p-6 text-center text-text-muted">
+          No report data found.
+        </div>
+      );
+    }
+
+    // (RP-7.4) Handle 'PROCESSING' status
+    if (reportData.status === 'PROCESSING') {
+      return (
+        <div className="p-12 text-center text-text-primary space-y-3">
+          <svg className="animate-spin h-8 w-8 text-primary mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <h3 className="text-lg font-semibold">AI is generating evidence...</h3>
+          <p className="text-sm text-text-secondary">This may take a moment. The page will automatically update when complete.</p>
+        </div>
+      );
+    }
+
+    // (RP-7.4) Handle 'FAILED' status
+    if (reportData.status === 'FAILED') {
+      return (
+        <div className="p-12 text-center text-error space-y-3">
+          <h3 className="text-lg font-semibold">Evidence Generation Failed</h3>
+          <p className="text-sm">Something went wrong during the AI generation. Please try re-generating the report.</p>
+          {/* TODO: Add a "Retry" button here */}
+        </div>
+      );
+    }
+
+    // (RP-7.4) Handle 'COMPLETED' status
+    if (reportData.status === 'COMPLETED') {
+      return (
+        <div className="flex-grow overflow-y-auto p-6 space-y-6">
+          {/* Evidence List Tab (U34-U44) */}
+          {analysisTab === 'evidence' && (
+            <div className="space-y-6">
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-semibold text-text-primary">Collected Evidence ({reportData.evidence.length})</h3>
+                <div className="flex items-center gap-3">
+                  <FilterButton />
+                  <button 
+                    onClick={() => { openModal('createEvidence'); setHighlightingEvidence(true); setSelectedEvidenceText(''); }}
+                    className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover flex items-center gap-2"
+                    disabled={isViewOnly}
+                  >
+                    + Create Evidence
+                  </button>
+                </div>
+              </div>
+              
+              {/* --- NEW: Render REAL evidence cards --- */}
+              {reportData.evidence.length > 0 ? (
+                reportData.evidence.map(renderEvidenceCard)
+              ) : (
+                <div className="p-12 text-center text-text-muted border-2 border-dashed border-border rounded-md">
+                  <h3 className="text-lg font-semibold">No Evidence Found</h3>
+                  <p className="text-sm mt-1">The AI could not find any evidence in the provided files. You can try creating evidence manually.</p>
+                </div>
+              )}
+              
+              {/* (U43) Generate Next Button */}
+              <div className="pt-4 flex justify-end gap-3" hidden={isViewOnly}>
+                <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-5 py-2.5 hover:bg-bg-medium flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Export List
+                </button>
+                <button onClick={() => setAnalysisTab('competency')} className="bg-primary text-white rounded-md text-sm font-semibold px-5 py-2.5">
+                  Generate Next Section &rarr;
+                </button>
+              </div>
+            </div>
+          )}
+          
+          {/* Competency Analysis Tab (U45-U50) */}
+          {analysisTab === 'competency' && (
+            <div className="space-y-6">
+              {/* --- This is still placeholder content --- */}
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-semibold text-text-primary">Competency Analysis</h3>
+                <FilterButton />
+              </div>
+              <div className="p-12 text-center text-text-muted border-2 border-dashed border-border rounded-md">
+                <h3 className="text-lg font-semibold">Coming Soon</h3>
+                <p className="text-sm mt-1">Phase 2: Competency Analysis will be implemented here.</p>
+              </div>
+            </div>
+          )}
+
+          {/* Executive Summary Tab (U51-U56) */}
+          {analysisTab === 'summary' && (
+            <div className="space-y-6">
+              {/* --- This is still placeholder content --- */}
+              <h3 className="text-lg font-semibold text-text-primary">Executive Summary</h3>
+              <div className="p-12 text-center text-text-muted border-2 border-dashed border-border rounded-md">
+                <h3 className="text-lg font-semibold">Coming Soon</h3>
+                <p className="text-sm mt-1">Phase 3: Executive Summary will be implemented here.</p>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+    
+    // Default fallback
+    return <div className="p-6">Loading...</div>;
+  };
+
   // (U31) Mock AI Completion Notification
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -223,7 +502,9 @@ export default function ReportPage() {
         {/* Header (U28, U29, U30) */}
         <header className="flex-shrink-0 flex items-center justify-between h-16 px-6 border-b border-border bg-bg-light z-10">
           <div>
-            <h2 className="text-xl font-bold text-text-primary">Analysis of Candidate A</h2>
+            <h2 className="text-xl font-bold text-text-primary">
+              {reportData ? reportData.title : 'Loading Report...'}
+            </h2>
             <button 
               className="text-sm font-medium text-primary hover:text-primary-hover"
               onClick={() => openModal('viewContext')}
@@ -338,188 +619,10 @@ export default function ReportPage() {
                   <button onClick={() => setAnalysisTab('summary')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${analysisTab === 'summary' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Executive Summary</button>
                 </nav>
               </div>
+
+              {/* Dynamic Analysis Content */}
+              {renderAnalysisContent()}
               
-              {/* Analysis Content */}
-              <div className="flex-grow overflow-y-auto p-6 space-y-6">
-                
-                {/* Evidence List Tab (U34-U44) */}
-                {analysisTab === 'evidence' && (
-                  <div className="space-y-6">
-                    <div className="flex justify-between items-center">
-                      <h3 className="text-lg font-semibold text-text-primary">Collected Evidence (3)</h3>
-                      <div className="flex items-center gap-3">
-                        <FilterButton />
-                        <button 
-                          onClick={() => { openModal('createEvidence'); setHighlightingEvidence(true); setSelectedEvidenceText(''); }}
-                          className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover flex items-center gap-2"
-                          disabled={isViewOnly}
-                        >
-                          + Create Evidence
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Evidence Card 1 (U36) */}
-                    <div 
-                      className={`w-full rounded-lg shadow-md bg-bg-light border border-border ${activeEvidenceId === 'evidence-2' ? 'border-l-4 border-l-warning' : ''} ${!isViewOnly ? 'cursor-pointer' : ''}`}
-                      onClick={() => !isViewOnly && highlightEvidence('evidence-2', 'case-study')}
-                    >
-                      {evidenceCardReason !== 'evidence-2' ? (
-                        <div>
-                          <div className="p-4 border-b border-border">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-semibold">Level 2</span>
-                              <p className="text-sm font-medium text-text-primary leading-snug">KB: Identifies core issues</p>
-                            </div>
-                            <p className="text-xs text-text-muted">Competency: Problem Solving</p>
-                          </div>
-                          <div className="p-4">
-                            <blockquote className="border-l-4 border-primary pl-4 text-sm italic">"The user feedback was varied. My initial step was to categorize it..."</blockquote>
-                            <p className="text-xs text-text-muted mt-2">Source: Case Study (Line 11)</p>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="p-4">
-                          <h4 className="text-sm font-semibold mb-2">AI Reasoning</h4>
-                          <p className="text-sm text-text-secondary bg-bg-medium p-3 rounded-md">This quote directly shows the assessee categorizing info to find the core issue.</p>
-                        </div>
-                      )}
-                      <div className="p-2 border-t border-border flex items-center gap-1">
-                        <button className="text-text-secondary rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium" onClick={(e) => { e.stopPropagation(); setEvidenceCardReason(prev => prev === 'evidence-2' ? null : 'evidence-2'); }}>
-                          {evidenceCardReason === 'evidence-2' ? 'Hide Reasoning' : 'See Reasoning'}
-                        </button>
-                        <button disabled={isViewOnly} onClick={(e) => { e.stopPropagation(); openModal('changeEvidence'); setHighlightingEvidence(true); }} className="text-text-secondary rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium">Change</button>
-                        <button disabled={isViewOnly} onClick={(e) => { e.stopPropagation(); openModal('deleteEvidence'); }} className="text-error/80 rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium">Delete</button>
-                      </div>
-                    </div>
-                    {/* ... Other cards ... */}
-                    
-                    {/* (U43) Generate Next Button */}
-                    <div className="pt-4 flex justify-end gap-3" hidden={isViewOnly}>
-                      <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-5 py-2.5 hover:bg-bg-medium flex items-center gap-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        Export List
-                      </button>
-                      <button onClick={() => setAnalysisTab('competency')} className="bg-primary text-white rounded-md text-sm font-semibold px-5 py-2.5">
-                        Generate Next Section &rarr;
-                      </button>
-                    </div>
-                  </div>
-                )}
-                
-                {/* Competency Analysis Tab (U45-U50) */}
-                {analysisTab === 'competency' && (
-                  <div className="space-y-6">
-                    <div className="flex justify-between items-center">
-                      <h3 className="text-lg font-semibold text-text-primary">Competency Analysis</h3>
-                      <FilterButton />
-                    </div>
-                    
-                    {/* Competency Card (U47) */}
-                    <div className="w-full rounded-lg shadow-md bg-bg-light border border-border">
-                      <div className="p-4 flex justify-between items-start border-b border-border">
-                        <h3 className="text-xl font-semibold text-text-primary mt-1">Problem Solving</h3>
-                        <div className="text-right">
-                          <label className="text-xs font-medium text-text-muted mb-1 block">Level (Target: 4)</label>
-                          <input type="number" defaultValue="3" disabled={isViewOnly} className="level-input w-16 px-2 py-1 text-2xl font-bold border-border text-warning" />
-                        </div>
-                      </div>
-                      <div className="p-4 space-y-5">
-                        {/* Explanation (U47) */}
-                        <div className="relative group">
-                          <div className="flex justify-between items-center mb-1">
-                            <label className="text-sm font-medium">Explanation</label>
-                            <AiButton onClick={() => openModal('askAI')} isViewOnly={isViewOnly} />
-                          </div>
-                          <textarea rows={3} disabled={isViewOnly} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm" defaultValue="The assessee demonstrates strong foundational problem-solving..."></textarea>
-                        </div>
-
-                        {/* Levels Explained (U47) */}
-                        <div className="space-y-4">
-                          <h4 className="text-sm font-medium text-text-primary pt-2 border-t border-border">Levels Explained</h4>
-                          {/* Level 3 */}
-                          <div className="pl-2">
-                            <h5 className="font-semibold text-text-primary text-sm mb-2">Level 3</h5>
-                            <div className="space-y-3 pl-4 border-l-2 border-border">
-                              <div className="relative group">
-                                <label className="flex items-start gap-2 cursor-pointer mb-1">
-                                  <input type="checkbox" className="w-4 h-4 rounded-sm border-border accent-primary mt-0.5 flex-shrink-0" defaultChecked disabled={isViewOnly} />
-                                  <span className="text-sm text-text-secondary">KB: Maps dependencies in conflicting feedback</span>
-                                </label>
-                                <div className="flex justify-between items-center mb-1">
-                                  <label className="text-xs font-medium text-text-muted">Explanation</label>
-                                  <AiButton onClick={() => openModal('askAI')} isViewOnly={isViewOnly} />
-                                </div>
-                                <textarea rows={2} className="w-full rounded-md border border-border p-2 bg-bg-medium shadow-sm text-sm" disabled={isViewOnly} defaultValue="Fulfilled. The assessee clearly stated they mapped dependencies..."></textarea>
-                                
-                                <div className="mt-3 pl-2">
-                                  <label className="text-xs font-semibold text-text-muted">Supporting Evidence:</label>
-                                  <ul className="list-none space-y-2 mt-1">
-                                    <li>
-                                      <blockquote className="border-l-4 border-border pl-3 text-xs italic text-text-secondary">"Based on the conflicting stakeholder feedback, I first mapped out..."</blockquote>
-                                    </li>
-                                  </ul>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                          {/* ... other levels ... */}
-                        </div>
-
-                        {/* Development Recommendations (U47) */}
-                        <div className="relative group pt-3 border-t border-border">
-                          <div className="flex justify-between items-center mb-1">
-                            <label className="text-sm font-medium">Development Recommendations</label>
-                            <AiButton onClick={() => openModal('askAI')} isViewOnly={isViewOnly} />
-                          </div>
-                          <textarea rows={4} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm" disabled={isViewOnly} defaultValue="1. (Independent) Practice identifying multiple potential solutions..."></textarea>
-                        </div>
-                      </div>
-                    </div>
-                    {/* (U50) Generate Next Button */}
-                    <div className="pt-4 flex justify-end" hidden={isViewOnly}>
-                      <button onClick={() => setAnalysisTab('summary')} className="bg-primary text-white rounded-md text-sm font-semibold px-5 py-2.5">
-                        Generate Next Section &rarr;
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Executive Summary Tab (U51-U56) */}
-                {analysisTab === 'summary' && (
-                  <div className="space-y-6">
-                    <h3 className="text-lg font-semibold text-text-primary">Executive Summary</h3>
-                    
-                    {/* Strengths (U53) */}
-                    <div className="relative group">
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="text-base font-semibold text-text-primary">Strengths</label>
-                        <AiButton onClick={() => openModal('askAI')} isViewOnly={isViewOnly} />
-                      </div>
-                      <textarea rows={4} disabled={isViewOnly} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm" defaultValue="The candidate shows strong (Level 3) communication skills..."></textarea>
-    
-                    </div>
-                    
-                    {/* (FIXED) Areas for Improvement (U53) */}
-                    <div className="relative group">
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="text-base font-semibold text-text-primary">Areas for Improvement</label>
-                        <AiButton onClick={() => openModal('askAI')} isViewOnly={isViewOnly} />
-                      </div>
-                      <textarea rows={4} disabled={isViewOnly} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm" defaultValue="The primary area for development is in strategic thinking..."></textarea>
-                    </div>
-
-                    {/* (FIXED) Development Recommendations (U53) */}
-                    <div className="relative group">
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="text-base font-semibold text-text-primary">Development Recommendations</label>
-                        <AiButton onClick={() => openModal('askAI')} isViewOnly={isViewOnly} />
-                      </div>
-                      <textarea rows={4} disabled={isViewOnly} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm" defaultValue="It is recommended that the candidate shadow a senior manager..."></textarea>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           )}
         </main>
@@ -649,6 +752,30 @@ export default function ReportPage() {
       )}
 
       {/* ... Other Modals (Delete, Save, ProjectContext) ... */}
+
+      {/* --- NEW: Delete Evidence Modal (RP-7.9) --- */}
+      {modals.deleteEvidence && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
+            <h3 className="text-lg font-semibold text-text-primary">Delete Evidence?</h3>
+            <p className="text-sm text-text-secondary mt-2">Are you sure you want to delete this piece of evidence? This action cannot be undone.</p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button 
+                className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" 
+                onClick={() => closeModal('deleteEvidence')}
+              >
+                Cancel
+              </button>
+              <button 
+                className="bg-error text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-red-700" 
+                onClick={handleDeleteEvidence}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
     </>
   );

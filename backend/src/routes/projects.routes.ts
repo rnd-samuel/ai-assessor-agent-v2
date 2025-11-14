@@ -51,13 +51,13 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
 
     // 3. Dynamically add the SEARCH filter
     if (search && typeof search === 'string' && search.trim() !== '') {
-      // Both queries already have a WHERE clause, so we can always safely add AND
+      // Both base queries already have a WHERE clause, so we can always safely add AND
       sqlQuery += ' AND'; 
       sqlQuery += ` p.name ILIKE $${params.length + 1}`;
       params.push(`%${search.trim()}%`);
     }
 
-    sqlQuery += ' GROUP BY p.id ORDER BY p.created_at DESC';
+    sqlQuery += ' GROUP BY p.id, p.name, p.created_at, p.creator_id ORDER BY p.created_at DESC';
 
     // 4. Execute the final query
     projectsResult = await query(sqlQuery, params);
@@ -92,7 +92,7 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
  * (P6) Must be a Project Manager or Admin
  */
 router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), async (req: AuthenticatedRequest, res) => {
-  const { name, userIds, prompts, dictionaryId } = req.body;
+  const { name, userIds, prompts, dictionaryId, simulationMethodIds } = req.body;
   const creatorId = req.user?.userId;
 
   if (!name || !prompts || !dictionaryId || !userIds || !Array.isArray(userIds)) {
@@ -133,6 +133,17 @@ router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), a
         "INSERT INTO project_users (project_id, user_id) VALUES ($1, $2)",
         [projectId, userId]
       );
+    }
+
+    // Link the selected simulation methods (NP-4.5)
+    if (simulationMethodIds && Array.isArray(simulationMethodIds)) {
+      for (const methodId of simulationMethodIds) {
+        await query(
+          // TODO: This table name must match your database
+          "INSERT INTO projects_to_global_methods (project_id, method_id) VALUES ($1, $2)",
+          [projectId, methodId]
+        );
+      }
     }
 
     // If all queries were successful, commit the transaction
@@ -493,13 +504,13 @@ router.get('/archived', authenticateToken, async (req: AuthenticatedRequest, res
 
     // 3. Dynamically add the SEARCH filter
     if (search && typeof search === 'string' && search.trim() !== '') {
-      // Both queries already have a WHERE clause, so we can always safely add AND
+      // Both base queries already have a WHERE clause, so we can always safely add AND
       sqlQuery += ' AND';
       sqlQuery += ` p.name ILIKE $${params.length + 1}`;
       params.push(`%${search.trim()}%`);
     }
     
-    sqlQuery += ' GROUP BY p.id ORDER BY p.created_at DESC';
+    sqlQuery += ' GROUP BY p.id, p.name, p.created_at, p.creator_id ORDER BY p.created_at DESC';
 
     // 4. Execute the final query
     projectsResult = await query(sqlQuery, params);
@@ -559,6 +570,44 @@ router.put('/:id/unarchive', authenticateToken, authorizeRole('Admin', 'Project 
 
   } catch (error) {
     console.error('Error unarchiving project:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * (NP-4.5) Get all available global simulation methods
+ * Used by the NewProjectPage to populate the multi-select
+ */
+router.get('/available-simulation-methods', authenticateToken, async (req, res) => {
+  try {
+    // This reads the REAL data from your database.
+    const result = await query(
+      'SELECT id, name FROM global_simulation_methods ORDER BY name'
+    );
+    res.status(200).json(result.rows);
+
+  } catch (error) {
+    console.error('Error fetching simulation methods:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * (NP-4.7) Get all users in the system
+ * Used by the NewProjectPage to populate the multi-select
+ */
+router.get('/available-users', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const currentUserId = req.user?.userId; // Get the ID of the user making the request
+
+  try {
+    // Fetch all users *except* the user creating the project
+    const result = await query(
+      'SELECT id, email FROM users WHERE id != $1 ORDER BY email',
+      [currentUserId]
+    );
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error('Error fetching users:', error);
     res.status(500).send({ message: 'Internal server error' });
   }
 });

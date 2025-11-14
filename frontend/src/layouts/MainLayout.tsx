@@ -26,14 +26,32 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     });
 
     // (GBL-2.7) Listen for our custom events from the worker
-    socket.on('generation-complete', (data: { message: string }) => {
+    socket.on('generation-complete', (data: {
+      message: string,
+      reportId: string,
+      status: string
+    }) => {
       console.log('Generation complete:', data.message);
       addToast(data.message, 'success');
+
+      // Check if we are on the report page that just finished
+      if (data.status === 'COMPLETED' && window.location.pathname.includes(`/reports/${data.reportId}`)) {
+        window.location.reload();
+      }
     });
 
-    socket.on('generation-failed', (data: { message: string }) => {
+    socket.on('generation-failed', (data: { 
+      message: string, 
+      reportId: string,
+      status: string 
+    }) => {
       console.error('Generation failed:', data.message);
       addToast(data.message, 'error');
+
+      // Also reload on failure to show the 'FAILED' status
+      if (data.status === 'FAILED' && window.location.pathname.includes(`/reports/${data.reportId}`)) {
+        window.location.reload();
+      }
     });
 
     // Clean up the connection when the component unmounts

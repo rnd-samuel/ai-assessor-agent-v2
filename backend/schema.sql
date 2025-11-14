@@ -112,3 +112,39 @@ CREATE TABLE IF NOT EXISTS report_files (
     (global_method_id IS NULL AND project_method_id IS NOT NULL)
   )
 );
+
+-- (RP-7.4) Add a status to the reports table
+ALTER TABLE reports
+ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'PROCESSING' NOT NULL;
+
+-- (RP-7.4) Table to store Phase 1 AI-generated evidence
+CREATE TABLE IF NOT EXISTS evidence (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  report_id UUID REFERENCES reports(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  
+  -- Data from the Zod Schema in ai-phase1-service.ts
+  competency TEXT NOT NULL,
+  level TEXT NOT NULL,
+  kb TEXT NOT NULL,
+  quote TEXT NOT NULL,
+  source TEXT NOT NULL,
+  reasoning TEXT NOT NULL,
+  
+  -- (RP-7.9) Track edits and deletions
+  is_archived BOOLEAN DEFAULT false,
+  last_edited_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS projects_to_global_methods (
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  method_id UUID REFERENCES global_simulation_methods(id) ON DELETE CASCADE,
+  PRIMARY KEY (project_id, method_id)
+);
+
+-- Inserts two test methods for your dropdown.
+-- Using 'ON CONFLICT' is a safe way to avoid errors if you run this twice.
+INSERT INTO global_simulation_methods (id, name) VALUES
+  ('f47ac10b-58cc-4372-a567-0e02b2c3d479', 'Case Study'),
+  ('747ac10b-58cc-4372-a567-0e02b2c3d480', 'Roleplay')
+ON CONFLICT (name) DO NOTHING;
