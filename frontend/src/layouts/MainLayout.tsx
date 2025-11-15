@@ -8,7 +8,13 @@ import { useToastStore } from '../state/toastStore';
 
 // This component will wrap our pages (like ProjectsDashboard, ReportPage, etc.)
 // We use 'children' to render whatever page is active.
-export default function MainLayout({ children }: { children: ReactNode }) {
+export default function MainLayout({ 
+  children,
+  setRefreshTrigger
+}: { 
+  children: ReactNode,
+  setRefreshTrigger?: (cb: (c: number) => number) => void // <-- Add '?'
+}) {
   const userId = useUserStore((state) => state.userId);
   const addToast = useToastStore((state) => state.addToast);
 
@@ -36,7 +42,13 @@ export default function MainLayout({ children }: { children: ReactNode }) {
 
       // Check if we are on the report page that just finished
       if (data.status === 'COMPLETED' && window.location.pathname.includes(`/reports/${data.reportId}`)) {
-        window.location.reload();
+        // Safety check before calling the optional prop
+        if (setRefreshTrigger) {
+          setRefreshTrigger(c => c + 1);
+        } else {
+          // Fallback for pages that don't have it (like /admin)
+          window.location.reload();
+        }
       }
     });
 
@@ -50,7 +62,11 @@ export default function MainLayout({ children }: { children: ReactNode }) {
 
       // Also reload on failure to show the 'FAILED' status
       if (data.status === 'FAILED' && window.location.pathname.includes(`/reports/${data.reportId}`)) {
-        window.location.reload();
+        if (setRefreshTrigger) {
+          setRefreshTrigger(c => c + 1);
+        } else {
+          window.location.reload();
+        }
       }
     });
 
@@ -58,7 +74,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     return () => {
       socket.disconnect();
     };
-  }, [userId, addToast]);
+  }, [userId, addToast, setRefreshTrigger]);
   return (
     <div className="flex h-screen bg-bg-light">
       <Sidebar />

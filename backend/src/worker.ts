@@ -2,6 +2,7 @@
 import 'dotenv/config';
 import { Worker } from 'bullmq';
 import { URL } from 'url';
+// This import is correct, as it points to the services folder
 import { runPhase1Generation } from './services/ai-phase1-service';
 
 // 1. Get Upstash Connection Details
@@ -20,16 +21,12 @@ const connection = {
 console.log('🤖 AI Worker is starting...');
 const worker = new Worker('ai-generation', async (job) => {
 
-  // Get user ID for notifications
-  // We will add this to the job data in the next step
   const userId = job.data.userId || 'unknown-user';
 
   if (job.name === 'generate-phase-1') {
     // Call our RAG pipeline
-    await runPhase1Generation(job.data.reportId, userId);
+    return runPhase1Generation(job.data.reportId, userId);
   }
-
-  // (Future: add job.name === 'generate-phase-2', etc.)
 
 }, { connection });
 

@@ -1,5 +1,5 @@
 // frontend/src/pages/ReportPage.tsx
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
 import apiService from '../services/apiService';
 import { useToastStore } from '../state/toastStore';
@@ -19,11 +19,29 @@ interface ReportData {
   title: string;
   status: 'PROCESSING' | 'COMPLETED' | 'FAILED';
   evidence: EvidenceCard[];
-  // rawFiles: any[]; // TODO: Add later
+  rawFiles: { // <-- ADD THIS
+    id: string;
+    file_name: string;
+    simulation_method_tag: string;
+    file_content: string;
+  }[];
+  dictionary: any;
+}
+
+interface CreateChangeModalProps {
+  reportId: string;
+  evidenceToEdit: EvidenceCard | null;
+  selectedEvidenceText: string;
+  source: string;
+  dictionary: any;
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: () => void;
+  addToast: (message: string, type: 'success' | 'error') => void;
 }
 
 type AnalysisTab = 'evidence' | 'competency' | 'summary';
-type RawTextTab = 'case-study' | 'roleplay';
+type RawTextTab = string;
 type ModalKey = 
   | 'viewContext' 
   | 'projectContext' 
@@ -88,10 +106,201 @@ const FilterButton = () => {
 };
 // --- (End Helper Components) ---
 
+function CreateChangeModal({
+  reportId,
+  evidenceToEdit,
+  selectedEvidenceText,
+  source,
+  dictionary,
+  isOpen,
+  onClose,
+  onSave,
+  addToast
+}: CreateChangeModalProps) {
+  const [competency, setCompetency] = useState('');
+  const [level, setLevel] = useState('');
+  const [kb, setKb] = useState('');
+  const [reasoning, setReasoning] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
-export default function ReportPage() {
+  const [competencyList, setCompetencyList] = useState<{id: string, name: string}[]>([]);
+  const [levelList, setLevelList] = useState<string[]>([]);
+  const [kbList, setKbList] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (dictionary?.kompetensi) {
+      const competencies = dictionary.kompetensi.map((c: any) => ({
+        id: c.id,
+        name: c.name || c.namaKompetensi,
+      }));
+      setCompetencyList(competencies);
+
+      if (!evidenceToEdit) {
+        setCompetency(competencies[0]?.id || '');
+      }
+    }
+  }, [dictionary, evidenceToEdit, isOpen]);
+
+  useEffect(() => {
+    if (competency && dictionary?.kompetensi) {
+      const comp = dictionary.kompetensi.find((c: any) => c.id === competency);
+      const levels = comp?.level?.map((l: any) => l.nomor) || [];
+      setLevelList(levels);
+
+      if (!evidenceToEdit || evidenceToEdit.competency !== competency) {
+        setLevel(levels[0] || '');
+      }
+    }
+  }, [competency, dictionary, evidenceToEdit]);
+
+  useEffect(() => {
+    if (competency && level && dictionary?.kompetensi) {
+      const comp = dictionary.kompetensi.find((c: any) => c.id === competency);
+      const lvl = comp?.level?.find((l: any) => l.nomor === level);
+      const kbs = lvl?.keyBehavior || [];
+      setKbList(kbs);
+
+      if (!evidenceToEdit || evidenceToEdit.level !== level) {
+        setKb(kbs[0] || '');
+      }
+    }
+  }, [competency, level, dictionary, evidenceToEdit]);
+
+  useEffect(() => {
+    if (evidenceToEdit && isOpen) {
+      setCompetency(evidenceToEdit.competency);
+      setLevel(evidenceToEdit.level);
+      setKb(evidenceToEdit.kb);
+      setReasoning(evidenceToEdit.reasoning);
+    }
+  }, [evidenceToEdit, isOpen]);
+
+  const quoteText = evidenceToEdit ? selectedEvidenceText : selectedEvidenceText;
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const payload = {
+        reportId,
+        competency,
+        level,
+        kb,
+        quote: quoteText,
+        source: source,
+        reasoning,
+      };
+
+      if (evidenceToEdit) {
+        if (!window.confirm("Are you sure you want to change this evidence?")) {
+          setIsSaving(false);
+          return;
+        }
+        await apiService.put(`/reports/evidence/${evidenceToEdit.id}`, payload);
+        addToast("Evidence changed successfully.", 'success');
+      } else {
+        await apiService.post('/reports/evidence', payload);
+        addToast("Evidence created successfully.", 'success');
+      }
+
+      onSave(); // Tell ReportPage to refresh
+      onClose(); // Close the modal
+    } catch (error) {
+      console.error("Failed to save evidence:", error);
+      addToast("Error: Could not save evidence.", 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-30 pointer-events-none">
+      <div className="fixed top-0 right-0 h-full w-full max-w-lg bg-bg-light shadow-lg flex flex-col pointer-events-auto">
+        <div className="flex items-center justify-between p-6 border-b border-border">
+          <h3 className="text-xl font-semibold text-text-primary">
+            {evidenceToEdit ? 'Change Evidence' : 'Create New Evidence'}
+          </h3>
+          <button className="text-text-muted hover:text-text-primary" onClick={onClose}>&times;</button>
+        </div>
+        <div className="flex-grow p-6 space-y-4 overflow-y-auto">
+          <p className="text-sm text-text-secondary p-3 bg-bg-medium rounded-md border border-primary/50">
+            {evidenceToEdit ? "Highlight new text to replace the quote below, or edit the details." : "Please highlight the evidence from the text panel on the left."}
+          </p>
+          <div>
+            <label className="text-sm font-medium text-text-primary mb-1 block">Selected Evidence</label>
+            <blockquote className="border-l-4 border-primary pl-4 text-sm italic bg-bg-medium p-3 rounded-md">
+              {quoteText ? `"${quoteText}"` : 'Please highlight text from the left panel...'}
+            </blockquote>
+          </div>
+
+          <div>
+            <label htmlFor="ev-comp" className="text-sm font-medium text-text-primary mb-1 block">Competency</label>
+            <select id="ev-comp" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
+              value={competency} onChange={(e) => setCompetency(e.target.value)}
+            >
+              {competencyList.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="ev-level" className="text-sm font-medium text-text-primary mb-1 block">Level</label>
+            <select id="ev-level" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
+              value={level} onChange={(e) => setLevel(e.target.value)}
+            >
+              {levelList.map(l => (
+                <option key={l} value={l}>{l}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="ev-kb" className="text-sm font-medium text-text-primary mb-1 block">Key Behavior</label>
+            <select id="ev-kb" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
+              value={kb} onChange={(e) => setKb(e.target.value)}
+            >
+              {kbList.length > 0 ? kbList.map(k => (
+                <option key={k} value={k}>{k}</option>
+              )) : (
+                <option value="">No KBs found for this level</option>
+              )}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="ev-reason" className="text-sm font-medium text-text-primary mb-1 block">Reasoning</label>
+            <textarea id="ev-reason" rows={4} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm"
+              placeholder="Explain why this quote matches the KB..."
+              value={reasoning} onChange={(e) => setReasoning(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="p-6 bg-bg-medium border-t border-border flex justify-end gap-3">
+          <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2" onClick={onClose}>Cancel</button>
+          <button
+            className={`bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 ${(!quoteText || isSaving) ? 'opacity-50 cursor-not-allowed' : ''}`}
+            disabled={!quoteText || isSaving}
+            onClick={handleSave}
+          >
+            {isSaving ? 'Saving...' : (evidenceToEdit ? 'Save Changes' : 'Create')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function ReportPage({ 
+  refreshTrigger,
+  setRefreshTrigger 
+}: { 
+  refreshTrigger: number,
+  setRefreshTrigger: (cb: (c: number) => number) => void
+ }) {
   // --- STATE HOOKS ---
   const { id: reportId } = useParams(); // Get reportId from URL
+
+  
+  const isInitialLoad = useRef(true);
 
   // State for data, loading, and errors
   const [isLoading, setIsLoading] = useState(true);
@@ -99,7 +308,8 @@ export default function ReportPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>('evidence');
-  const [rawTextTab, setRawTextTab] = useState<RawTextTab>('case-study');
+  const [highestPhaseVisible, setHighestPhaseVisible] = useState<AnalysisTab>('evidence');
+  const [rawTextTab, setRawTextTab] = useState<RawTextTab | null>(null);
   const [showLeftPanel, setShowLeftPanel] = useState(true);
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [modals, setModals] = useState({
@@ -117,16 +327,19 @@ export default function ReportPage() {
   const [_hasUnsavedChanges, setHasUnsavedChanges] = useState(true);
   const [isViewOnly, _setIsViewOnly] = useState(false);
   const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
+  const [activeQuote, setActiveQuote] = useState<string | null>(null);
+  const [activeFileId, setActiveFileId] = useState<string | null>(null);
+  
 
   // State for deletion and toasts
   const [evidenceToDelete, setEvidenceToDelete] = useState<string | null>(null);
   const addToast = useToastStore((state) => state.addToast);
+  const [evidenceToEdit, setEvidenceToEdit] = useState<EvidenceCard | null>(null);
 
   // --- REFS ---
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const currentHighlightRef = useRef<HTMLElement | null>(null);
   const isDraggingRef = useRef(false);
 
   // --- MODAL HELPERS ---
@@ -139,20 +352,39 @@ export default function ReportPage() {
     }
   };
 
+  const activeFile = reportData?.rawFiles.find(f => f.id === rawTextTab);
+  const activeSourceTag = activeFile?.simulation_method_tag || '';
+
+  useEffect(() => {
+    if (reportData?.rawFiles && reportData.rawFiles.length > 0) {
+      setRawTextTab(reportData.rawFiles[0].id);
+    }
+  }, [reportData]);
+
   // Data Fetching Function
   useEffect(() => {
-    if (!reportId) {
-      setError("No report ID found in the URL.");
-      setIsLoading(false);
-      return;
-    }
-
-    const fetchReportData = async() => {
+    const fetchReportData = async () => {
+      if (!reportId) {
+        setError("No report ID found in the URL.");
+        setIsLoading(false);
+        return;
+      }
       try {
         setIsLoading(true);
         setError(null);
         const response = await apiService.get<ReportData>(`/reports/${reportId}/data`);
         setReportData(response.data);
+
+        // If this is a REFRESH (not the initial load)
+        if (!isInitialLoad.current) {
+          // Check the status of the data *we just fetched*
+          if (response.data.status === 'COMPLETED') {
+            addToast("Evidence list has finished generating.", 'success');
+          } else if (response.data.status === 'FAILED') {
+            addToast("Evidence generation failed.", 'error');
+          }
+        }
+
       } catch (err: any) {
         console.error("Failed to fetch report data:", err);
         setError(err.response?.data?.message || "An unknown error occurred.");
@@ -162,7 +394,7 @@ export default function ReportPage() {
     };
 
     fetchReportData();
-  }, [reportId]);
+  }, [reportId, refreshTrigger, addToast]);
 
   // --- PAGE LOGIC ---
   const saveReport = () => {
@@ -181,10 +413,26 @@ export default function ReportPage() {
     }
   };
 
-  const highlightEvidence = (evidenceId: string, tabName: RawTextTab) => {
-    setActiveEvidenceId(evidenceId);
-    setRawTextTab(tabName);
-  };
+  const highlightEvidence = (evidence: EvidenceCard) => {
+  // Find the file ID this evidence came from
+  // We'll mock "Case Study" -> file 0, "Roleplay" -> file 1
+  // TODO: This mapping needs to be more robust later
+  const file = reportData?.rawFiles.find(
+    f => f.simulation_method_tag === evidence.source
+  );
+
+  if (file) {
+    setActiveEvidenceId(evidence.id);
+    setActiveQuote(evidence.quote); // Set the quote text
+    setActiveFileId(file.id);     // Set the file to switch to
+    setRawTextTab(file.id);       // Switch the tab
+  } else {
+    // Fallback if source doesn't match
+    setActiveEvidenceId(evidence.id);
+    setActiveQuote(null);
+    setActiveFileId(null);
+  }
+};
 
   // --- NEW: Function to delete an evidence card ---
   const handleDeleteEvidence = async () => {
@@ -223,21 +471,20 @@ export default function ReportPage() {
   
   // Effect for highlighting
   useEffect(() => {
-    if (!activeEvidenceId) return;
-    const textElement = document.getElementById(`${activeEvidenceId}-text`);
-    if (textElement) {
-      if (currentHighlightRef.current) {
-        currentHighlightRef.current.classList.remove('evidence-highlight');
-      }
-      textElement.classList.add('evidence-highlight');
-      currentHighlightRef.current = textElement;
-      
-      const textPanel = textElement.closest('.overflow-y-auto');
-      if (textPanel) {
+    // We now depend on the quote and file ID
+    if (!activeQuote || !activeFileId) return;
+
+    // Small delay to allow React to render the new tab's content
+    const timer = setTimeout(() => {
+      const textElement = document.getElementById(`highlight-0`);
+      if (textElement) {
+        // We don't need to manage currentHighlightRef anymore
         textElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
-    }
-  }, [activeEvidenceId, rawTextTab]);
+    }, 50);
+    
+    return () => clearTimeout(timer);
+  }, [activeQuote, activeFileId, rawTextTab]);
 
   // Resizable Panel & Show/Hide Logic (U32)
   useEffect(() => {
@@ -307,16 +554,26 @@ export default function ReportPage() {
   }, [showLeftPanel, showRightPanel]);
 
   // Helper for rendering evidence cards
-  const renderEvidenceCard = (evidence: EvidenceCard) => {
+  const renderEvidenceCard = (evidence: EvidenceCard, dictionary: any) => {
     const cardId = evidence.id;
     const isActive = activeEvidenceId === cardId;
     const reasonVisible = evidenceCardReason === cardId;
+
+    let competencyName = evidence.competency;
+    if (dictionary?.kompetensi) {
+      const comp = dictionary.kompetensi.find((c: any) =>
+        c.id === evidence.competency || c.name === evidence.competency || c.namaKompetensi === evidence.competency
+      );
+      if (comp) {
+        competencyName = comp.name || comp.namaKompetensi;
+      }
+    }
 
     return (
       <div
         key={cardId}
         className={`w-full rounded-lg shadow-md bg-bg-light border ${isActive ? 'border-primary' : 'border-border'} ${!isViewOnly ? 'cursor-pointer' : ''}`}
-        onClick={() => !isViewOnly && highlightEvidence(evidence.id, evidence.source.toLowerCase() as RawTextTab)} // TODO: Make source mapping robust
+        onClick={() => !isViewOnly && highlightEvidence(evidence)}
       >
         {reasonVisible ? (
           <div className="p-4">
@@ -330,7 +587,7 @@ export default function ReportPage() {
                 <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-semibold">Level {evidence.level}</span>
                 <p className="text-sm font-medium text-text-primary leading-snug">{evidence.kb}</p>
               </div>
-              <p className="text-xs text-text-muted">Competency: {evidence.competency}</p>
+              <p className="text-xs text-text-muted">Competency: {competencyName}</p>
             </div>
             <div className="p-4">
               <blockquote className="border-l-4 border-primary pl-4 text-sm italic">"{evidence.quote}"</blockquote>
@@ -342,7 +599,18 @@ export default function ReportPage() {
           <button className="text-text-secondary rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium" onClick={(e) => { e.stopPropagation(); setEvidenceCardReason(prev => prev === cardId ? null : cardId); }}>
             {reasonVisible ? 'Hide Reasoning' : 'See Reasoning'}
           </button>
-          <button disabled={isViewOnly} onClick={(e) => { e.stopPropagation(); openModal('changeEvidence'); setHighlightingEvidence(true); }} className="text-text-secondary rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium">Change</button>
+          <button 
+            disabled={isViewOnly} 
+            onClick={(e) => { 
+              e.stopPropagation(); 
+              setEvidenceToEdit(evidence);
+              setSelectedEvidenceText(evidence.quote);
+              setHighlightingEvidence(true);
+              openModal('changeEvidence');  
+            }} 
+            className="text-text-secondary rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium">
+              Change
+          </button>
           <button 
             disabled={isViewOnly} 
             onClick={(e) => {
@@ -422,7 +690,12 @@ export default function ReportPage() {
                 <div className="flex items-center gap-3">
                   <FilterButton />
                   <button 
-                    onClick={() => { openModal('createEvidence'); setHighlightingEvidence(true); setSelectedEvidenceText(''); }}
+                    onClick={() => { 
+                      setEvidenceToEdit(null);
+                      setSelectedEvidenceText('');
+                      setHighlightingEvidence(true);
+                      openModal('createEvidence');
+                    }}
                     className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover flex items-center gap-2"
                     disabled={isViewOnly}
                   >
@@ -433,7 +706,9 @@ export default function ReportPage() {
               
               {/* --- NEW: Render REAL evidence cards --- */}
               {reportData.evidence.length > 0 ? (
-                reportData.evidence.map(renderEvidenceCard)
+                reportData.evidence.map(evidence =>
+                  renderEvidenceCard(evidence, reportData.dictionary)
+                )
               ) : (
                 <div className="p-12 text-center text-text-muted border-2 border-dashed border-border rounded-md">
                   <h3 className="text-lg font-semibold">No Evidence Found</h3>
@@ -447,7 +722,13 @@ export default function ReportPage() {
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   Export List
                 </button>
-                <button onClick={() => setAnalysisTab('competency')} className="bg-primary text-white rounded-md text-sm font-semibold px-5 py-2.5">
+                <button 
+                  onClick={() => {
+                    setAnalysisTab('competency'),
+                    setHighestPhaseVisible('competency');
+                  }} 
+                  className="bg-primary text-white rounded-md text-sm font-semibold px-5 py-2.5"
+                >
                   Generate Next Section &rarr;
                 </button>
               </div>
@@ -487,14 +768,6 @@ export default function ReportPage() {
     // Default fallback
     return <div className="p-6">Loading...</div>;
   };
-
-  // (U31) Mock AI Completion Notification
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      alert('Evidence list has finished generating.');
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, []);
 
   return (
     <>
@@ -555,50 +828,75 @@ export default function ReportPage() {
               onMouseUp={handleTextSelection}
             >
               <div className="flex-shrink-0 border-b border-border">
-                <nav className="flex -mb-px">
-                  <button onClick={() => setRawTextTab('case-study')} className={`flex-1 whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${rawTextTab === 'case-study' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Case Study</button>
-                  <button onClick={() => setRawTextTab('roleplay')} className={`flex-1 whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${rawTextTab === 'roleplay' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Roleplay</button>
+                <nav className="flex -mb-px overflow-x-auto">
+                  {reportData?.rawFiles && reportData.rawFiles.map(file => (
+                    <button 
+                      key={file.id}
+                      onClick={() => setRawTextTab(file.id)} 
+                      className={`flex-shrink-0 whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${
+                        rawTextTab === file.id 
+                        ? 'border-primary text-primary' 
+                        : 'border-transparent text-text-muted hover:border-border'
+                      }`}
+                    >
+                      {file.simulation_method_tag}
+                    </button>
+                  ))}
                 </nav>
               </div>
               <div className="flex-grow overflow-y-auto">
-                {rawTextTab === 'case-study' && (
-                  <div className="p-6 font-mono text-sm text-text-secondary flex">
-                    <div className="line-numbers pr-4 text-right text-text-muted select-none">
-                      {[...Array(20).keys()].map(n => <div key={n}>{n + 1}</div>)}
-                    </div>
-                    <div className="flex-1">
-                      <div><strong>Interviewer:</strong> Can you walk me through your thought process for the market entry proposal?</div>
-                      <br />
-                      <div><strong>Assessee:</strong> Certainly. The first step I took was to analyze the provided market data, looking at consumer segments and competitor saturation.</div>
-                      <br />
-                      <div id="evidence-1-location"><strong>Assessee:</strong> <span id="evidence-1-text">Based on the conflicting stakeholder feedback, I first mapped out the dependencies before proposing a phased rollout to mitigate risks.</span> I identified that the finance department's concerns about initial outlay directly conflicted with marketing's desire for a large-scale launch.</div>
-                      <br />
-                      <div><strong>Interviewer:</strong> How did you resolve that conflict?</div>
-                      <br />
-                      <div id="evidence-2-location"><strong>Assessee:</strong> My analysis showed that the risk of a full launch was too high. <span id="evidence-2-text">The user feedback was varied. My initial step was to categorize it to find the core issue before developing a solution.</span> This categorization allowed me to present a data-backed compromise: a pilot program in two key cities.</div>
-                      <br />
-                      <div><strong>Assessee:</strong> This approach would satisfy finance's need for limited exposure while giving marketing the data they needed to validate the concept.</div>
-                      <br />
-                      <div><strong>Interviewer:</strong> Thank you.</div>
-                    </div>
+                {reportData?.rawFiles && reportData.rawFiles.map(file => (
+                  <div 
+                    key={file.id}
+                    className="p-6 font-mono text-sm text-text-secondary"
+                    // Show only the active tab's content
+                    style={{ display: rawTextTab === file.id ? 'block' : 'none' }} 
+                  >
+                    {/* We can split by newline to simulate line numbers */}
+                    {reportData?.rawFiles && reportData.rawFiles.map(file => {
+                      let content: ReactNode;
+
+                      // Check if this file is the active one AND we have a quote to highlight
+                      if (activeFileId === file.id && activeQuote) {
+                        // Split the content by the quote
+                        const parts = file.file_content.split(activeQuote);
+
+                        // Rebuild the content, interleaving <mark> tags
+                        content = (
+                          <div className="whitespace-pre-wrap">
+                            {parts.map((part, index) => (
+                              <span key={index}>
+                                {part}
+                                {index < parts.length - 1 && (
+                                  <mark id={`highlight-${index}`} className="evidence-highlight">
+                                    {activeQuote}
+                                  </mark>
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                        );
+                      } else {
+                        // Otherwise, just render the plain text
+                        content = (
+                          <div className="whitespace-pre-wrap">
+                            {file.file_content}
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div
+                          key={file.id}
+                          className="p-6 font-mono text-sm text-text-secondary"
+                          style={{ display: rawTextTab === file.id ? 'block' : 'none' }}
+                        >
+                          {content}
+                        </div>
+                      );
+                    })}
                   </div>
-                )}
-                {rawTextTab === 'roleplay' && (
-                  <div className="p-6 font-mono text-sm text-text-secondary flex">
-                    <div className="line-numbers pr-4 text-right text-text-muted select-none">
-                      {[...Array(10).keys()].map(n => <div key={n}>{n + 1}</div>)}
-                    </div>
-                    <div className="flex-1">
-                      <div><strong>Roleplayer (Angry Customer):</strong> I've been on hold for 20 minutes! This is unacceptable!</div>
-                      <br />
-                      <div><strong>Assessee:</strong> Ma'am, I sincerely apologize for your wait time. I can understand your frustration, and I'm here to help you resolve this right now.</div>
-                      <br />
-                      <div><strong>Roleplayer:</strong> You'd better! My order is missing, and I need it by tomorrow.</div>
-                      <br />
-                      <div id="evidence-3-location"><strong>Assessee:</strong> <span id="evidence-3-text">I've pulled up your account. I see the order you're referring to, and it seems to have stalled in our warehouse.</span> I am taking personal responsibility for this and am contacting the warehouse manager directly as we speak to get it expedited.</div>
-                    </div>
-                  </div>
-                )}
+                ))}
               </div>
             </div>
           )}
@@ -614,9 +912,28 @@ export default function ReportPage() {
               {/* Analysis Tabs */}
               <div className="flex-shrink-0 border-b border-border bg-bg-light">
                 <nav className="flex -mb-px px-6">
-                  <button onClick={() => setAnalysisTab('evidence')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${analysisTab === 'evidence' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Evidence List</button>
-                  <button onClick={() => setAnalysisTab('competency')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${analysisTab === 'competency' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Competency Analysis</button>
-                  <button onClick={() => setAnalysisTab('summary')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${analysisTab === 'summary' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Executive Summary</button>
+                  <button 
+                    onClick={() => setAnalysisTab('evidence')} 
+                    className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${analysisTab === 'evidence' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}
+                    >
+                      Evidence List
+                    </button>
+                    {(highestPhaseVisible === 'competency' || highestPhaseVisible === 'summary') && (
+                      <>
+                        <button 
+                          onClick={() => setAnalysisTab('competency')} 
+                          className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${analysisTab === 'competency' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}
+                        >
+                          Competency Analysis
+                        </button>
+                        <button 
+                          onClick={() => setAnalysisTab('summary')} 
+                          className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${analysisTab === 'summary' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}
+                        >
+                          Executive Summary
+                        </button>
+                      </>
+                    )}
                 </nav>
               </div>
 
@@ -629,65 +946,26 @@ export default function ReportPage() {
       </div>
       
       {/* --- MODALS --- */}
+      {/* Change Evidence Modal */}
+      <CreateChangeModal
+        isOpen={modals.createEvidence || modals.changeEvidence}
+        onClose={() => {
+          closeModal('createEvidence');
+          closeModal('changeEvidence');
+          setHighlightingEvidence(false);
+        }}
+        onSave={() => {
+          setRefreshTrigger(c => c + 1);
+        }}
+        reportId={reportId!}
+        evidenceToEdit={evidenceToEdit}
+        selectedEvidenceText={selectedEvidenceText}
+        source={activeSourceTag}
+        dictionary={reportData?.dictionary}
+        addToast={addToast}
+      />
 
-      {/* (FIXED) Create/Change Evidence Modal (U39, U42) */}
-      {(modals.createEvidence || modals.changeEvidence) && (
-        <div className="fixed inset-0 z-30 pointer-events-none">
-          {/* NO BACKDROP CLICK - Per your request */}
-          <div className="fixed top-0 right-0 h-full w-full max-w-lg bg-bg-light shadow-lg flex flex-col pointer-events-auto">
-            <div className="flex items-center justify-between p-6 border-b border-border">
-              <h3 className="text-xl font-semibold text-text-primary">{modals.createEvidence ? 'Create New Evidence' : 'Change Evidence'}</h3>
-              <button className="text-text-muted hover:text-text-primary" onClick={() => { closeModal('createEvidence'); closeModal('changeEvidence'); setHighlightingEvidence(false); }}>&times;</button>
-            </div>
-            <div className="flex-grow p-6 space-y-4 overflow-y-auto">
-              <p className="text-sm text-text-secondary p-3 bg-bg-medium rounded-md border border-primary/50">
-                Please highlight the new evidence from the text panel on the left.
-              </p>
-              <div>
-                <label className="text-sm font-medium text-text-primary mb-1 block">Selected Evidence</label>
-                <blockquote className="border-l-4 border-primary pl-4 text-sm italic bg-bg-medium p-3 rounded-md">
-                  {selectedEvidenceText ? `"${selectedEvidenceText}"` : 'Please highlight text from the left panel...'}
-                </blockquote>
-              </div>
-              <div>
-                <label htmlFor="ev-comp" className="text-sm font-medium text-text-primary mb-1 block">Competency</label>
-                <select id="ev-comp" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
-                  <option>Communication</option>
-                  <option>Problem Solving</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="ev-level" className="text-sm font-medium text-text-primary mb-1 block">Level</label>
-                <select id="ev-level" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
-                  <option>1</option><option>2</option><option>3</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="ev-kb" className="text-sm font-medium text-text-primary mb-1 block">Key Behavior</label>
-                <select id="ev-kb" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
-                  <option>Identifies core issues</option>
-                  <option>Maps dependencies</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="ev-reason" className="text-sm font-medium text-text-primary mb-1 block">Reasoning</label>
-                <textarea id="ev-reason" rows={4} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm" placeholder="Explain why this quote matches the KB..."></textarea>
-              </div>
-            </div>
-            <div className="p-6 bg-bg-medium border-t border-border flex justify-end gap-3">
-              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2" onClick={() => { closeModal('createEvidence'); closeModal('changeEvidence'); setHighlightingEvidence(false); }}>Cancel</button>
-              <button 
-                className={`bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 ${!selectedEvidenceText ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={!selectedEvidenceText}
-              >
-                {modals.createEvidence ? 'Create' : 'Change'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* (FIXED) View Context Modal (U29) */}
+      {/* View Context Modal (U29) */}
       {modals.viewContext && (
         <div className="fixed inset-0 z-30 pointer-events-none">
           <div className="fixed inset-0 bg-black/20 pointer-events-auto" onClick={() => closeModal('viewContext')}></div>
@@ -779,4 +1057,4 @@ export default function ReportPage() {
       
     </>
   );
-}
+};

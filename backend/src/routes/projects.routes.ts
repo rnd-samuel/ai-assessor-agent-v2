@@ -191,7 +191,7 @@ router.get('/:id/form-data', authenticateToken, async (req, res) => {
       if (dictionary.kompetensi) {
         competencies = dictionary.kompetensi.map((comp: any) => ({
           id: comp.id || comp.namaKompetensi,
-          name: comp.namaKompetensi
+          name: comp.name || comp.namaKompetensi
         }));
       }
     }

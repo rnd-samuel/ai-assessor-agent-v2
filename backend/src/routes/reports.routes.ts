@@ -3,6 +3,11 @@ import { Router, Request } from 'express';
 import { authenticateToken } from '../middleware/auth.middleware';
 import { query } from '../services/db';
 import { aiGenerationQueue } from '../services/queue';
+import multer from 'multer';
+
+// Configure multer to store files in memory as buffers
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
 interface AuthenticatedRequest extends Request {
   user?: {
@@ -52,6 +57,47 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
   } catch (error) {
     console.error("Error creating report:", error);
     res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (NR-6.2) Upload assessment result files for a new report
+ * This route expects 'multipart/form-data'
+ */
+router.post('/:id/upload', authenticateToken, upload.single('file'), async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  const { simulationMethod } = req.body;
+  const file = req.file;
+
+  if (!file) {
+    return res.status(400).send({ message: 'No file uploaded.' });
+  }
+  if (!simulationMethod) {
+    return res.status(400).send({ message: 'Missing simulationMethod tag.' });
+  }
+
+  try {
+    // TODO: In the future, upload file.buffer to GCS
+    const gcsPath = `mock/gcs/path/for/${file.originalname}`;
+
+    // Read file content as text (FOR MOCKING ONLY)
+    const fileContent = file.buffer.toString('utf-8');
+
+    // (RP-7.3) Save file metadata to the database
+    await query(
+      `INSERT INTO report_files (report_id, file_name, gcs_path, simulation_method_tag, file_content)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [reportId, file.originalname, gcsPath, simulationMethod, fileContent]
+    );
+
+    res.status(200).send({
+      message: 'File uploaded and associated with report.',
+      filename: file.originalname,
+    });
+
+  } catch (error) {
+    console.error('Report file upload failed', error);
+    res.status(500).send({ message: 'Internal server error during file upload.' });
   }
 });
 
@@ -164,7 +210,8 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
          r.title, 
          r.status, 
          r.creator_id,
-         p.creator_id as project_creator_id
+         p.creator_id as project_creator_id,
+         p.dictionary_id
        FROM reports r
        JOIN projects p ON r.project_id = p.id
        WHERE r.id = $1`,
@@ -176,6 +223,17 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
     }
 
     const report = reportResult.rows[0];
+
+    let dictionary = null;
+    if (report.dictionary_id) {
+      const dictResult = await query(
+        `SELECT content FROM competency_dictionaries WHERE id = $1`,
+        [report.dictionary_id]
+      );
+      if (dictResult.rows.length > 0) {
+        dictionary = dictResult.rows[0].content;
+      }
+    }
     const userRole = req.user?.role;
     
     // Authorization: User must be the report creator, project creator, or an admin
@@ -196,22 +254,89 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       [reportId]
     );
 
-    // 3. TODO: Get uploaded raw text files (for RP-7.3)
-    // const filesResult = await query(
-    //   `SELECT id, file_name, gcs_url, simulation_method_tag FROM report_files WHERE report_id = $1`,
-    //   [reportId]
-    // );
+    // Get uploaded raw text files (for RP-7.3)
+    const filesResult = await query(
+      `SELECT id, file_name, simulation_method_tag, file_content 
+      FROM report_files 
+      WHERE report_id = $1`,
+      [reportId]
+    );
 
     // 4. Send all data back to the frontend
     res.status(200).json({
       title: report.title,
       status: report.status, // e.g., 'PROCESSING', 'COMPLETED', 'FAILED'
       evidence: evidenceResult.rows,
-      // rawFiles: filesResult.rows // We'll add this later
+      rawFiles: filesResult.rows,
+      dictionary: dictionary
     });
 
   } catch (error) {
     console.error(`Error fetching data for report ${reportId}:`, error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * (RP-7.7) Create a new Evidence Card
+ */
+router.post('/evidence', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { reportId, competency, level, kb, quote, source, reasoning } = req.body;
+  const userId = req.user?.userId;
+
+  try {
+    // TODO: Add permission check: is user the report creator?
+
+    const result = await query(
+      `INSERT INTO evidence (report_id, competency, level, kb, quote, source, reasoning)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`, // Return the new card
+      [reportId, competency, level, kb, quote, source, reasoning]
+    );
+
+    res.status(201).json(result.rows[0]);
+
+  } catch (error) {
+    console.error(`Error creating evidence for report ${reportId}:`, error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+
+/**
+ * (RP-7.8) Update an existing Evidence Card
+ */
+router.put('/evidence/:evidenceId', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { evidenceId } = req.params;
+  const { competency, level, kb, quote, source, reasoning } = req.body;
+  const userId = req.user?.userId;
+
+  try {
+    // TODO: Add permission check: is user the report creator?
+
+    const result = await query(
+      `UPDATE evidence
+       SET 
+         competency = $1, 
+         level = $2, 
+         kb = $3, 
+         quote = $4, 
+         source = $5, 
+         reasoning = $6,
+         last_edited_at = NOW()
+       WHERE id = $7
+       RETURNING *`, // Return the updated card
+      [competency, level, kb, quote, source, reasoning, evidenceId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).send({ message: 'Evidence not found' });
+    }
+
+    res.status(200).json(result.rows[0]);
+
+  } catch (error) {
+    console.error(`Error updating evidence ${evidenceId}:`, error);
     res.status(500).send({ message: 'Internal server error' });
   }
 });

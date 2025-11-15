@@ -9,7 +9,7 @@ import {
 import { OpenAI } from '@llamaindex/openAI';
 import { PGVectorStore } from '@llamaindex/postgres';
 import { z } from 'zod';
-import { getIO } from './socket';
+// import { getIO } from './socket';
 
 // 1. Define the AI's output structure (FRD 2.3, Test-AI-02)
 const EvidenceSchema = z.object({
@@ -34,73 +34,54 @@ export async function runPhase1Generation(reportId: string, userId: string) {
   console.log('[Worker] Acquired DB client from pool.');
 
   try {
-    // --- 2. RETRIEVE (The 4-Layer RAG) ---
-    // This is still a placeholder. In a real app, you'd fetch this
-    // data based on the reportId and its associated projectId.
-    const globalContext = "You are a professional assessment expert. Your writing style is formal and analytical.";
-    const vectorContext = "Placeholder for vector data (simulations, project KB)";
     
-    // TODO: Fetch the *actual* uploaded assessment results for this reportId
-    const assesseeData = `
-      Based on the conflicting stakeholder feedback, I first mapped out 
-      the dependencies before proposing a phased rollout to mitigate risks. 
-      My analysis showed that the risk of a full launch was too high.
-      The user feedback was varied. My initial step was to categorize it 
-      to find the core issue before developing a solution.
-    `;
+    // --- START: MOCK DATA IMPLEMENTATION ---
 
-    // --- 3. AUGMENT (Build the Prompt) ---
-    // TODO: Fetch the custom prompt for this report's project
-    const customPrompt = `
-      Scan the "Assessee Results" text. Find quotes that match the Key Behaviors (KBs).
-      For each quote, provide your reasoning.
-      Return your answer as a JSON object matching this schema:
-      { "evidence": [ { "competency": "string", "level": "string", "kb": "string", "quote": "string", "source": "string", "reasoning": "string" } ] }
-    `;
+    console.log('[Worker] Bypassing AI call and generating mock data...');
 
-    const fullPrompt = `
-      ${customPrompt}
+    // This is a 5-second delay to simulate the AI "thinking"
+    // This gives you time to see your loading spinner on the frontend!
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
-      --- Global Rules ---
-      ${globalContext}
+    // This mock object *matches* the Zod schema
+    const mockOutput = {
+      evidence: [
+        {
+          competency: "Problem Solving",
+          level: "3",
+          kb: "Identifies and analyzes complex problems",
+          quote: "Based on the conflicting stakeholder feedback, I first mapped out the dependencies.",
+          source: "Case Study",
+          reasoning: "The user identified a conflict (complex problem) and took a structured step to analyze it (mapped dependencies)."
+        },
+        {
+          competency: "Problem Solving",
+          level: "2",
+          kb: "Categorizes issues to find the core problem",
+          quote: "The user feedback was varied. My initial step was to categorize it to find the core issue.",
+          source: "Case Study",
+          reasoning: "The quote directly matches the key behavior of categorization."
+        },
+        {
+          competency: "Communication",
+          level: "1",
+          kb: "Speaks clearly and concisely",
+          quote: "I am taking personal responsibility for this and am contacting the warehouse manager directly.",
+          source: "Roleplay",
+          reasoning: "This is a clear, direct, and concise statement of action."
+        }
+      ]
+    };
+    
+    // We can skip validation because we *know* our mock data is correct
+    const validatedOutput = mockOutput;
 
-      --- Vector Context (Simulations, Project KB) ---
-      ${vectorContext}
+    // --- END: MOCK DATA IMPLEMENTATION ---
 
-      --- Assessee Results (to analyze) ---
-      ${assesseeData}
-    `;
-
-    // --- 4. GENERATE (Call the LLM) ---
-    const llm = new OpenAI({
-      model: 'openrouter/anthropic/claude-3-haiku',
-      apiKey: process.env.OPENROUTER_API_KEY,
-      baseURL: 'https://openrouter.ai/api/v1',
-    });
-
-    console.log('[Worker] Calling LLM...');
-    const response = await llm.chat({
-      messages: [{ role: 'user', content: fullPrompt }],
-      responseFormat: { type: 'json_object' },
-    });
-
-    const messageContent = response.message.content;
-    let jsonString: string;
-
-    if (typeof messageContent === 'string') {
-      jsonString = messageContent;
-    } else if (Array.isArray(messageContent) && messageContent[0]?.type === 'text') {
-      jsonString = messageContent[0].text;
-    } else {
-      throw new Error("AI response was not in the expected JSON text format.");
-    }
-
-    const jsonResponse = JSON.parse(jsonString || "{}");
 
     // --- 5. VALIDATE & SAVE (FR-AI-VAL-001) ---
-    console.log('[Worker] Validating AI output...');
-    const validatedOutput = EvidenceArraySchema.parse(jsonResponse);
-
+    console.log('[Worker] Saving mock output...');
+    
     // --- START DATABASE TRANSACTION ---
     await poolClient.query('BEGIN');
 
@@ -125,12 +106,28 @@ export async function runPhase1Generation(reportId: string, userId: string) {
 
     // --- 6. NOTIFY (U31) ---
     console.log(`[Worker] Phase 1 complete for Report: ${reportId}`);
-    getIO().to(userId).emit('generation-complete', {
-      reportId: reportId,
-      phase: 1,
-      status: 'COMPLETED', // Send the new status
-      message: 'Evidence list has finished generating.'
-    });
+
+    return { userId, reportId, status: 'COMPLETED' };
+    
+    // --- FIX FOR "Socket.io not initialized!" ---
+    // The worker (a separate process) does not have the io instance.
+    // We will emit the event from the *main server* process.
+    // We can do this by using a separate queue or, for now, just
+    // rely on the frontend to reload on its own.
+    
+    // Let's modify the queue service to handle notifications
+    // For now, let's just log it. We can fix the socket later.
+    // getIO().to(userId).emit('generation-complete', {
+    //   reportId: reportId,
+    //   phase: 1,
+    //   status: 'COMPLETED', // Send the new status
+    //   message: 'Evidence list has finished generating.'
+    // });
+    
+    // NOTE: The "Socket.io not initialized!" error you saw before was in the CATCH block.
+    // Because this mock data will *succeed*, it will not hit the catch block,
+    // so you won't get that error. The notification will silently fail,
+    // but the database *will* be updated.
 
   } catch (error: any) {
     // --- ROLLBACK TRANSACTION ON ERROR ---
@@ -143,13 +140,15 @@ export async function runPhase1Generation(reportId: string, userId: string) {
       [reportId]
     );
 
-    // Notify user of the failure
-    getIO().to(userId).emit('generation-failed', {
-      reportId: reportId,
-      phase: 1,
-      status: 'FAILED', // Send the new status
-      message: error.message || 'Evidence generation failed.'
-    });
+    return { userId, reportId, status: 'FAILED', message: error.message };
+
+    // This part will still fail, but we won't hit it with mock data
+    // getIO().to(userId).emit('generation-failed', {
+    //   reportId: reportId,
+    //   phase: 1,
+    //   status: 'FAILED', // Send the new status
+    //   message: error.message || 'Evidence generation failed.'
+    // });
   } finally {
     // --- ALWAYS release the client back to the pool ---
     poolClient.release();

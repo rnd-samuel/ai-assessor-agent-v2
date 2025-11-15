@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import apiService from '../services/apiService';
 import { useNavigate } from 'react-router-dom';
+import { useProjectStore } from '../state/projectStore';
 
 // Define the type for our tabs to make it safer
 type SectionId = 
@@ -35,6 +36,8 @@ export default function NewProjectPage() {
     dictionary: false,
     addSimMethod: false,
   });
+
+  const fetchProjects = useProjectStore((state) => state.fetchProjects);
 
   // --- State for interactive dropdowns ---
   const [isDictionaryOpen, setIsDictionaryOpen] = useState(false);
@@ -201,6 +204,8 @@ export default function NewProjectPage() {
 
         setIsUploading(false);
         alert('Project created successfully!');
+
+        await fetchProjects();
 
         // (P14) Redirect to the new project's report dashboard
         navigate(`/projects/${projectId}`);

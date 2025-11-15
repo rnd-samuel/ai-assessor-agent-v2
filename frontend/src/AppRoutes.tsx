@@ -1,6 +1,7 @@
 // frontend/src/AppRoutes.tsx
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useUserStore } from './state/userStore';
+import { useState } from 'react';
 
 // Layouts & Pages
 import MainLayout from './layouts/MainLayout';
@@ -24,6 +25,8 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 export default function AppRoutes() {
   const isAuthenticated = useUserStore((state) => state.isAuthenticated);
 
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
   return (
     <BrowserRouter>
       <Routes>
@@ -38,7 +41,7 @@ export default function AppRoutes() {
           path="/projects/new" // <-- Specific route
           element={
             <ProtectedRoute>
-              <MainLayout>
+              <MainLayout setRefreshTrigger={setRefreshTrigger}>
                 <NewProjectPage />
               </MainLayout>
             </ProtectedRoute>
@@ -48,7 +51,7 @@ export default function AppRoutes() {
           path="/projects/:projectId" // <-- Dynamic route
           element={
             <ProtectedRoute>
-              <MainLayout>
+              <MainLayout setRefreshTrigger={setRefreshTrigger}>
                 <ReportsDashboard />
               </MainLayout>
             </ProtectedRoute>
@@ -58,7 +61,7 @@ export default function AppRoutes() {
           path="/projects" // <-- General route
           element={
             <ProtectedRoute>
-              <MainLayout>
+              <MainLayout setRefreshTrigger={setRefreshTrigger}>
                 <ProjectsDashboard />
               </MainLayout>
             </ProtectedRoute>
@@ -69,7 +72,7 @@ export default function AppRoutes() {
           path="/projects/:projectId/reports/new" // <-- Specific route
           element={
             <ProtectedRoute>
-              <MainLayout>
+              <MainLayout setRefreshTrigger={setRefreshTrigger}>
                 <NewReportPage />
               </MainLayout>
             </ProtectedRoute>
@@ -79,8 +82,11 @@ export default function AppRoutes() {
           path="/reports/:id" // <-- Dynamic route
           element={
             <ProtectedRoute>
-              <MainLayout>
-                <ReportPage />
+              <MainLayout setRefreshTrigger={setRefreshTrigger}>
+                <ReportPage 
+                  refreshTrigger={refreshTrigger}
+                  setRefreshTrigger={setRefreshTrigger}
+                 />
               </MainLayout>
             </ProtectedRoute>
           } 
@@ -90,7 +96,9 @@ export default function AppRoutes() {
           path="/admin" 
           element={
             <ProtectedRoute>
-              <AdminPanelPage />
+              <MainLayout>
+                <AdminPanelPage />
+              </MainLayout>
             </ProtectedRoute>
           } 
         />

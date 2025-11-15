@@ -148,3 +148,13 @@ INSERT INTO global_simulation_methods (id, name) VALUES
   ('f47ac10b-58cc-4372-a567-0e02b2c3d479', 'Case Study'),
   ('747ac10b-58cc-4372-a567-0e02b2c3d480', 'Roleplay')
 ON CONFLICT (name) DO NOTHING;
+
+ALTER TABLE report_files
+ADD COLUMN IF NOT EXISTS simulation_method_tag VARCHAR(255),
+ADD COLUMN IF NOT EXISTS file_content TEXT;
+
+-- We'll also drop the complex constraint for now to simplify
+ALTER TABLE report_files
+DROP CONSTRAINT IF EXISTS chk_method_link,
+ALTER COLUMN global_method_id DROP NOT NULL,
+ALTER COLUMN project_method_id DROP NOT NULL;

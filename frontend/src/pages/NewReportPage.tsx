@@ -22,8 +22,9 @@ type FileStatus = 'uploading' | 'processing' | 'complete';
 interface UploadedFile {
   id: string;
   name: string;
+  file: File;
   status: FileStatus;
-  simulationMethod: string; // <-- This will store the dropdown value
+  simulationMethod: string;
 }
 
 // 2. Moved FileListItem component OUTSIDE
@@ -154,9 +155,10 @@ export default function NewReportPage() {
     const newFiles: UploadedFile[] = Array.from(fileList).map(file => ({
       id: `file-${Date.now()}-${file.name}`,
       name: file.name,
+      file: file,
       status: 'uploading',
       simulationMethod: '',
-    }));
+  }));
 
     setFiles(prev => [...prev, ...newFiles]);
 
@@ -221,6 +223,22 @@ export default function NewReportPage() {
 
       const response = await apiService.post('/reports', payload);
       const { reportId } = response.data;
+
+      // Upload Logic
+      console.log(`Report created with ID: ${reportId}. Now uploading ${files.length} files...`);
+
+      for (const uploadedFile of files) {
+        const formData = new FormData();
+        formData.append('file', uploadedFile.file); // <-- The actual File object
+        formData.append('simulationMethod', uploadedFile.simulationMethod); // <-- The tag
+
+        // 3. Post to the new endpoint
+        await apiService.post(`/reports/${reportId}/upload`, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+      }
 
       // Navigate to the correct, plural-path route
       navigate(`/reports/${reportId}`);

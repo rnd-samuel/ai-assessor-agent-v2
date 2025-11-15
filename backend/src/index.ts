@@ -4,12 +4,19 @@ import express from 'express';
 import cors from 'cors';
 import http from 'http';
 import { Server } from 'socket.io';
-import { setupQueue, aiGenerationQueue } from './services/queue'; // FRD 2.1
-import { setupSocket } from './services/socket';
+import { setupQueue, aiGenerationQueue, aiGenerationQueueEvents } from './services/queue';
+import { setupSocket, getIO } from './services/socket';
 import authRoutes from './routes/auth.routes';
 import { authenticateToken, authorizeRole } from './middleware/auth.middleware';
 import projectsRoutes from './routes/projects.routes';
 import reportsRoutes from './routes/reports.routes';
+
+import { Job } from 'bullmq';
+
+interface AiJobData {
+  reportId: string;
+  userId: string;
+}
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -34,6 +41,57 @@ const io = new Server(httpServer, {
 // --- 3. Initialize Services ---
 setupSocket(io); // Make the 'io' instance available to other files
 setupQueue(); // Connect to Redis and initialize queues
+
+// Notification bridge
+aiGenerationQueueEvents.on('completed', async (args: { jobId: string, returnvalue: any }) => {
+  console.log(`[Queue Events] Job ${args.jobId} completed.`);
+  try {
+    // 1. Fetch the job from the queue using its ID
+    const job = await aiGenerationQueue.getJob(args.jobId) as Job<AiJobData> | undefined;
+
+    // 2. Now you can safely check 'if (job)'
+    if (job) {
+      const { userId, reportId } = job.data;
+      if (userId && reportId) {
+        getIO().to(userId).emit('generation-complete', {
+          reportId: reportId,
+          phase: 1,
+          status: 'COMPLETED',
+          message: 'Evidence list has finished generating.'
+        });
+      }
+    }
+  } catch (error) {
+    console.error(`[Queue Events] Error fetching completed job ${args.jobId}:`, error);
+  }
+});
+
+aiGenerationQueueEvents.on('failed', async (args: { jobId: string, failedReason: string }, id: string) => {
+  console.log(`[Queue Events] Job ${args.jobId} failed: ${args.failedReason}`);
+  try {
+    // 1. Fetch the job from the queue using its ID
+    const job = await aiGenerationQueue.getJob(args.jobId) as Job<AiJobData> | undefined;
+
+    // 2. This is the block you were asking about! Now 'job' is defined.
+    if (job) {
+      const { userId, reportId } = job.data;
+      
+      // 'err.message' is now 'args.failedReason'
+      const errMessage = args.failedReason;
+
+      if (userId && reportId) {
+        getIO().to(userId).emit('generation-failed', {
+          reportId: reportId,
+          phase: 1,
+          status: 'FAILED',
+          message: `Evidence generation failed: ${errMessage}`
+        });
+      }
+    }
+  } catch (error) {
+    console.error(`[Queue Events] Error fetching failed job ${args.jobId}:`, error);
+  }
+});
 
 // --- 4. API Routes (We will build these out next) ---
 app.use('/api/auth', authRoutes);

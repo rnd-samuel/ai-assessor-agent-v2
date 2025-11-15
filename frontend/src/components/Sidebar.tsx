@@ -2,12 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useUserStore } from '../state/userStore';
 import { Link, useNavigate } from 'react-router-dom';
-import apiService from '../services/apiService';
-
-interface Project {
-  id: string;
-  name: string;
-}
+import { useProjectStore } from '../state/projectStore';
 
 export default function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -16,20 +11,13 @@ export default function Sidebar() {
   const role = useUserStore((state) => state.role);
   const clearUser = useUserStore((state) => state.clearUser);
   const navigate = useNavigate();
-  const [projects, setProjects] = useState<Project[]>([]);
+
+  const projects = useProjectStore((state) => state.projects);
+  const fetchProjects = useProjectStore((state) => state.fetchProjects);
 
   useEffect(() => {
-    const fetchProjects = async () => {
-      try {
-        const response = await apiService.get('/projects');
-        setProjects(response.data);
-      } catch (error) {
-        console.error("Failed to fetch projects for sidebar:", error);
-      }
-    };
-
     fetchProjects();
-  }, []);
+  }, [fetchProjects]);
 
   return (
     <aside 

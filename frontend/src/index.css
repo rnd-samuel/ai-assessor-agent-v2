@@ -1,3 +1,9 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.evidence-highlight {
+  background-color: #fde047; /* Tailwind 'yellow-300' */
+  color: #111827; /* Tailwind 'text-primary' */
+  border-radius: 2px;
+}

@@ -1,6 +1,6 @@
 // backend/src/services/queue.ts
 import 'dotenv/config';
-import { Queue, Worker } from 'bullmq';
+import { Queue, QueueEvents, Worker } from 'bullmq';
 import { getIO } from './socket';
 
 // --- START: NEW CODE ---
@@ -23,10 +23,14 @@ const connection = {
 export let aiGenerationQueue: Queue;
 export let fileIngestionQueue: Queue;
 
+export let aiGenerationQueueEvents: QueueEvents;
+
 export const setupQueue = () => {
   // This part stays the same
   aiGenerationQueue = new Queue('ai-generation', { connection });
   fileIngestionQueue = new Queue('file-ingestion', { connection });
+
+  aiGenerationQueueEvents = new QueueEvents('ai-generation', { connection });
 
   console.log('BullMQ Queues initialized and connected to Redis.');
 
