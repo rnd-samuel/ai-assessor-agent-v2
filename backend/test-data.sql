@@ -104,3 +104,62 @@ SELECT (SELECT id FROM first_project), id FROM methods
 ON CONFLICT DO NOTHING; -- Do nothing if they are already linked
 
 SELECT 'Test data seeded successfully!' AS status;
+
+UPDATE competency_dictionaries
+SET content = '{
+    "namaKamus": "Standard Leadership Dictionary",
+    "kompetensi": [
+      {
+        "id": "comp-ps",
+        "name": "Problem Solving",
+        "definisiKompetensi": "Menganalisis situasi, mengidentifikasi akar masalah, dan mengembangkan solusi yang efektif.",
+        "level": [
+          {
+            "nomor": "1",
+            "penjelasan": "Deskripsi Level 1 untuk Problem Solving.",
+            "keyBehavior": [
+              "KB 1.1: Identifikasi masalah yang jelas.",
+              "KB 1.2: Kumpulkan informasi relevan."
+            ]
+          },
+          {
+            "nomor": "2",
+            "penjelasan": "Deskripsi Level 2 untuk Problem Solving.",
+            "keyBehavior": [
+              "KB 2.1: Analisis data untuk menemukan pola.",
+              "KB 2.2: Usulkan solusi sederhana."
+            ]
+          }
+        ]
+      },
+      {
+        "id": "comp-comm",
+        "name": "Communication",
+        "definisiKompetensi": "Menyampaikan informasi secara jelas, efektif, dan persuasif.",
+        "level": [
+          {
+            "nomor": "1",
+            "penjelasan": "Deskripsi Level 1 untuk Komunikasi.",
+            "keyBehavior": [
+              "KB 1.1: Berbicara dengan jelas.",
+              "KB 1.2: Mendengarkan secara aktif."
+            ]
+          },
+          {
+            "nomor": "2",
+            "penjelasan": "Deskripsi Level 2 untuk Komunikasi.",
+            "keyBehavior": [
+              "KB 2.1: Menstrukturkan pesan dengan logis.",
+              "KB 2.2: Menyesuaikan gaya bicara dengan audiens."
+            ]
+          }
+        ]
+      }
+    ]
+  }'
+WHERE id = 'f9a22000-69d1-49d6-8f07-b62f58138918';
+
+-- 4. Give your admin user a name
+UPDATE users SET name = 'Samuel Testing' WHERE email = 'admin@example.com';
+
+SELECT 'Test data seeded successfully!' AS status;

@@ -204,12 +204,13 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
   const userId = req.user?.userId;
 
   try {
-    // 1. Get the report details (and check if user has access)
+    // Get the report details (and check if user has access)
     const reportResult = await query(
       `SELECT 
          r.title, 
          r.status, 
          r.creator_id,
+         r.project_id,
          p.creator_id as project_creator_id,
          p.dictionary_id
        FROM reports r
@@ -245,7 +246,7 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       return res.status(403).send({ message: 'You are not authorized to view this report.' });
     }
 
-    // 2. Get all associated evidence cards
+    // Get all associated evidence cards
     const evidenceResult = await query(
       `SELECT id, competency, level, kb, quote, source, reasoning, created_at
        FROM evidence
@@ -254,7 +255,7 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       [reportId]
     );
 
-    // Get uploaded raw text files (for RP-7.3)
+    // (RP-7.3) Get uploaded raw text files
     const filesResult = await query(
       `SELECT id, file_name, simulation_method_tag, file_content 
       FROM report_files 
@@ -262,10 +263,11 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       [reportId]
     );
 
-    // 4. Send all data back to the frontend
+    // Send all data back to the frontend
     res.status(200).json({
       title: report.title,
       status: report.status, // e.g., 'PROCESSING', 'COMPLETED', 'FAILED'
+      projectId: report.project_id,
       evidence: evidenceResult.rows,
       rawFiles: filesResult.rows,
       dictionary: dictionary

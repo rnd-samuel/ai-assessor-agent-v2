@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { query } from '../services/db'; // <-- This is now our real query function
+import { query } from '../services/db';
 
 const router = Router();
 
@@ -38,7 +38,8 @@ router.post('/login', async (req, res) => {
     const token = jwt.sign(
       { 
         userId: user.id, 
-        role: user.role // (FR-AUTH-001)
+        role: user.role, // (FR-AUTH-001)
+        name: user.name
       },
       jwtSecret,
       { expiresIn: '8h' } // Lengthened session
@@ -49,7 +50,8 @@ router.post('/login', async (req, res) => {
       message: "Login successful",
       token: token,
       userId: user.id,
-      role: user.role
+      role: user.role,
+      name: user.name
     });
 
   } catch (error) {
@@ -58,12 +60,12 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// --- (NEW) /register route to create our admin user ---
+// --- /register route to create our admin user ---
 // We'll use this ONCE to create our user, then we can remove it.
 router.post('/register', async (req, res) => {
-  const { email, password, role } = req.body;
-  if (!email || !password || !role) {
-    return res.status(400).send({ message: "Email, password, and role are required." });
+  const { email, password, role, name } = req.body;
+  if (!email || !password || !role || !name) {
+    return res.status(400).send({ message: "Email, password, role, and name are required." });
   }
 
   try {
@@ -73,8 +75,8 @@ router.post('/register', async (req, res) => {
 
     // Save to DB
     const newUser = await query(
-      "INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id, email, role",
-      [email.toLowerCase(), passwordHash, role]
+      "INSERT INTO users (email, password_hash, role, name) VALUES ($1, $2, $3, $4) RETURNING id, email, role, name",
+      [email.toLowerCase(), passwordHash, role, name]
     );
 
     res.status(201).send(newUser.rows[0]);

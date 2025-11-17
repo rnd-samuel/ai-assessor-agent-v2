@@ -1,5 +1,5 @@
 // frontend/src/pages/ProjectsDashboard.tsx
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useUserStore } from '../state/userStore';
 import apiService from '../services/apiService';
@@ -14,9 +14,14 @@ interface Project {
   canArchive: boolean;
 }
 
+// Define sort state types
+type SortKey = 'date' | 'name' | 'reports';
+type SortOrder = 'asc' | 'desc';
+
 export default function ProjectsDashboard() {
   const navigate = useNavigate();
   const role = useUserStore((state) => state.role);
+  const userName = useUserStore((state) => state.name);
   
   // --- STATE ---
   const [projects, setProjects] = useState<Project[]>([]);
@@ -25,6 +30,11 @@ export default function ProjectsDashboard() {
   const [showingArchived, setShowingArchived] = useState(false); //P4
   const [modals, setModals] = useState({ archive: false, unarchive: false });
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set()); //P3
+
+  // State for sorting
+  // Default sort: by date, descending (newest first)
+  const [sortKey, setSortKey] = useState<SortKey>('date');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
 
   // State for single-project archive and toasts
   const [projectToArchive, setProjectToArchive] = useState<string | null>(null);
@@ -168,24 +178,124 @@ export default function ProjectsDashboard() {
     setSelectedProjects(newSelection);
   };
 
-  // Handler for "Select All" checkbox
-  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>, projects: typeof currentProjects) => {
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      // Toggle sort order
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      // Set new key and default to ascending
+      setSortKey(key);
+      setSortOrder('asc');
+    }
+  };
+  
+  const currentProjects = showingArchived ? archivedProjects : projects;
+
+  const sortedProjects = useMemo(() => {
+    // Create a new array to avoid mutating state
+    const projectsToSort = [...currentProjects]; 
+
+    projectsToSort.sort((a, b) => {
+      let valA: string | number | Date;
+      let valB: string | number | Date;
+
+      // Assign values based on the sort key
+      switch (sortKey) {
+        case 'date':
+          // Convert string date back to Date object for correct comparison
+          valA = new Date(a.date);
+          valB = new Date(b.date);
+          break;
+        case 'name':
+          valA = a.name.toLowerCase();
+          valB = b.name.toLowerCase();
+          break;
+        case 'reports':
+          valA = a.reports;
+          valB = b.reports;
+          break;
+        default:
+          return 0;
+      }
+      
+      // Perform comparison
+      if (valA < valB) {
+        return sortOrder === 'asc' ? -1 : 1;
+      }
+      if (valA > valB) {
+        return sortOrder === 'asc' ? 1 : -1;
+      }
+      return 0;
+    });
+
+    return projectsToSort;
+  }, [currentProjects, sortKey, sortOrder]);
+
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) {
-      const allIds = projects.map(p => p.id);
+      // Use sortedProjects here
+      const allIds = sortedProjects.map(p => p.id);
       setSelectedProjects(new Set(allIds));
     } else {
       setSelectedProjects(new Set());
     }
   };
+
+  const canSelectAll = sortedProjects.length > 0;
+  const allSelected = canSelectAll && selectedProjects.size === sortedProjects.length;
   
-  const currentProjects = showingArchived ? archivedProjects : projects;
-  const canSelectAll = currentProjects.length > 0;
-  const allSelected = canSelectAll && selectedProjects.size === currentProjects.length;
+  // Helper component for sort arrow
+  const SortArrow = ({ columnKey }: { columnKey: SortKey }) => {
+    const isActive = sortKey === columnKey;
+    
+    return (
+      <svg 
+        xmlns="http://www.w3.org/2000/svg" 
+        width="16" // Smaller size
+        height="16" 
+        viewBox="0 0 24 24" 
+        fill="none" 
+        stroke="currentColor" 
+        strokeWidth="2" 
+        strokeLinecap="round" 
+        strokeLinejoin="round" 
+        className="inline-block flex-shrink-0" // Use flex-shrink-0 to prevent icon from shrinking
+      >
+        <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+        
+        {/* Down Arrow */}
+        <path 
+          d="M9 18l3 3l3 -3" 
+          className={isActive && sortOrder === 'desc' ? 'text-text-primary' : 'text-text-muted/50'}
+          strokeWidth={isActive && sortOrder === 'desc' ? '3' : '2'}
+        />
+        <path 
+          d="M12 15v6" 
+          className={isActive && sortOrder === 'desc' ? 'text-text-primary' : 'text-text-muted/50'}
+          strokeWidth={isActive && sortOrder === 'desc' ? '3' : '2'}
+        />
+        
+        {/* Up Arrow */}
+        <path 
+          d="M15 6l-3 -3l-3 3" 
+          className={isActive && sortOrder === 'asc' ? 'text-text-primary' : 'text-text-muted/50'}
+          strokeWidth={isActive && sortOrder === 'asc' ? '3' : '2'}
+        />
+        <path 
+          d="M12 3v6" 
+          className={isActive && sortOrder === 'asc' ? 'text-text-primary' : 'text-text-muted/50'}
+          strokeWidth={isActive && sortOrder === 'asc' ? '3' : '2'}
+        />
+      </svg>
+    );
+  };
 
   return (
     <div className="p-8">
       {/* Page Header (U8) */}
-      <h1 className="text-3xl font-bold text-text-primary">Projects Dashboard</h1>
+      <h1 className="text-3xl font-bold text-text-primary">
+        Welcome, {userName || '...'}!
+      </h1>
 
       {/* Toolbar (U12, P4) */}
       <div className="flex justify-between items-center mt-6 mb-4">
@@ -271,14 +381,29 @@ export default function ProjectsDashboard() {
                     type="checkbox"
                     className="w-4 h-4 rounded-sm border-border accent-primary align-middle"
                     checked={allSelected}
-                    onChange={(e) => handleSelectAll(e, currentProjects)}
+                    onChange={handleSelectAll}
                   />
                 </th>
               )}
               {/* (U9) Columns */}
-              <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/50">Date</th>
-              <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/50">Name</th>
-              <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/50">No. of Reports</th>
+              <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/50" onClick={() => handleSort('date')}>
+                <div className="flex items-center justify-between">
+                  <span>Date</span>
+                  <SortArrow columnKey="date" />
+                </div>
+              </th>
+              <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/50" onClick={() => handleSort('name')}>
+                <div className="flex items-center justify-between">
+                  <span>Name</span>
+                  <SortArrow columnKey="name" />
+                </div>
+              </th>
+              <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/50" onClick={() => handleSort('reports')}>
+                <div className="flex items-center justify-between">
+                  <span>No. of Reports</span>
+                  <SortArrow columnKey="reports" />
+                </div>
+              </th>
               
               {/* Actions Column (P3) */}
               {(role === 'Project Manager' || role === 'Admin') && (
@@ -297,7 +422,7 @@ export default function ProjectsDashboard() {
             )}
 
             {/* --- EMPTY STATE --- */}
-            {!isLoading && currentProjects.length === 0 && (
+            {!isLoading && sortedProjects.length === 0 && (
                 <tr>
                     <td colSpan={5} className="p-12 text-center text-text-muted">
                         {searchQuery.length > 0 ? (
@@ -313,7 +438,7 @@ export default function ProjectsDashboard() {
             )}
 
             {/* --- REAL DATA MAP --- */}
-            {!isLoading && currentProjects.map((project) => (
+            {!isLoading && sortedProjects.map((project) => (
                 <tr key={project.id} className="border-b border-border hover:bg-bg-medium">
                     {(role === 'Project Manager' || role === 'Admin') && (
                         <td className="p-3 w-12 text-center">

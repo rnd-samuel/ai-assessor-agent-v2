@@ -3,6 +3,16 @@ import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
 import apiService from '../services/apiService';
 import { useToastStore } from '../state/toastStore';
+import * as XLSX from 'xlsx';
+import ProjectContextModal from '../components/ProjectContextModal';
+
+// Data Format Helper
+const formatDateToDDMMYY = (date: Date) => {
+  const d = date.getDate().toString().padStart(2, '0');
+  const m = (date.getMonth() + 1).toString().padStart(2, '0'); // Month is 0-indexed
+  const y = date.getFullYear().toString().slice(-2);
+  return `${d}${m}${y}`;
+};
 
 // Define data structures
 interface EvidenceCard {
@@ -18,8 +28,9 @@ interface EvidenceCard {
 interface ReportData {
   title: string;
   status: 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  projectId: string;
   evidence: EvidenceCard[];
-  rawFiles: { // <-- ADD THIS
+  rawFiles: {
     id: string;
     file_name: string;
     simulation_method_tag: string;
@@ -64,46 +75,6 @@ const AiButton = ({ onClick, isViewOnly }: { onClick: () => void, isViewOnly: bo
     </button>
   );
 };
-
-// (U41, U46) Filter Button Helper
-const FilterButton = () => {
-  const [filterOpen, setFilterOpen] = useState(false);
-  return (
-    <div className="relative">
-      <button 
-        onClick={() => setFilterOpen(!filterOpen)} 
-        className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors flex items-center gap-2"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
-        Filter
-      </button>
-      {filterOpen && (
-        <div 
-          onMouseLeave={() => setFilterOpen(false)} // Simple close
-          className="absolute right-0 top-full mt-2 w-72 bg-bg-light rounded-lg shadow-lg border border-border p-4 z-20 space-y-4"
-        >
-          <div>
-            <label htmlFor="filter-comp" className="text-sm font-medium text-text-primary mb-1 block">Competency</label>
-            <select id="filter-comp" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
-              <option value="">All Competencies</option>
-              <option value="comm">Communication</option>
-              <option value="ps">Problem Solving</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="filter-level" className="text-sm font-medium text-text-primary mb-1 block">Level</label>
-            <select id="filter-level" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
-              <option value="">All Levels</option>
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="3">3</option>
-            </select>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
 // --- (End Helper Components) ---
 
 function CreateChangeModal({
@@ -144,7 +115,7 @@ function CreateChangeModal({
   useEffect(() => {
     if (competency && dictionary?.kompetensi) {
       const comp = dictionary.kompetensi.find((c: any) => c.id === competency);
-      const levels = comp?.level?.map((l: any) => l.nomor) || [];
+      const levels = comp?.level?.map((l: { nomor: string }) => l.nomor) || [];
       setLevelList(levels);
 
       if (!evidenceToEdit || evidenceToEdit.competency !== competency) {
@@ -249,7 +220,7 @@ function CreateChangeModal({
             <select id="ev-level" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
               value={level} onChange={(e) => setLevel(e.target.value)}
             >
-              {levelList.map(l => (
+              {levelList.map((l: string) => (
                 <option key={l} value={l}>{l}</option>
               ))}
             </select>
@@ -335,6 +306,12 @@ export default function ReportPage({
   const [evidenceToDelete, setEvidenceToDelete] = useState<string | null>(null);
   const addToast = useToastStore((state) => state.addToast);
   const [evidenceToEdit, setEvidenceToEdit] = useState<EvidenceCard | null>(null);
+
+  // State for filtering
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [filterCompetency, setFilterCompetency] = useState('');
+  const [filterLevel, setFilterLevel] = useState('');
+  const [filterSource, setFilterSource] = useState('');
 
   // --- REFS ---
   const leftPanelRef = useRef<HTMLDivElement>(null);
@@ -553,6 +530,76 @@ export default function ReportPage({
     };
   }, [showLeftPanel, showRightPanel]);
 
+  // Derived data for filters and export
+  // Memoize these so they don't recalculate on every render
+  const competencyMap = new Map <string, string>();
+  if (reportData?.dictionary?.kompetensi) {
+    reportData.dictionary.kompetensi.forEach((c: any) => {
+      competencyMap.set(c.id, c.name || c.namaKompetensi);
+    });
+  }
+
+  const sourceList = [
+    ...new Set(reportData?.rawFiles.map(f => f.simulation_method_tag) || [])
+  ];
+  const levelList = [
+    ...new Set(reportData?.evidence.map(e => e.level) || [])
+  ].sort();
+
+  // Filtered Evidence
+  const filteredEvidence = reportData?.evidence.filter(evidence => {
+    return (
+      (filterCompetency === '' || evidence.competency === filterCompetency) &&
+      (filterLevel === '' || evidence.level === filterLevel) &&
+      (filterSource === '' || evidence.source === filterSource)
+    );
+  }) || [];
+
+  // (RP-7.10) Export function
+  const handleExportEvidence = () => {
+    if (!reportData) return;
+
+    addToast("Generating expoert...", 'info');
+
+    try {
+      // Prepare data for export
+      const dataToExport = filteredEvidence.map(ev => ({
+        Competency: competencyMap.get(ev.competency) || ev.competency,
+        Level: ev.level,
+        "Key Behavior": ev.kb,
+        Source: ev.source,
+        Evidence: ev.quote,
+        Reasoning: ev.reasoning
+      }));
+
+      // Create workbook and worksheet
+      const ws = XLSX.utils.json_to_sheet(dataToExport);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet (wb, ws, "Evidence");
+
+      // Set column widths
+      ws['!cols'] = [
+        { wch: 25 }, // Competency
+        { wch: 10 }, // Level
+        { wch: 40 }, // Key Behavior
+        { wch: 20 }, // Source
+        { wch: 60 }, // Evidence
+        { wch: 60 }, // Reasoning
+      ];
+
+      // Trigger download
+      const datePrefix = formatDateToDDMMYY(new Date());
+      const safeTitle = reportData.title.replace(/[^a-zA-Z0-9]/g, '_');
+      const newFilename = `${datePrefix}_Evidence_${safeTitle}.xlsx`;
+
+      XLSX.writeFile(wb, newFilename);
+
+    } catch (exportError) {
+      console.error("Failed to export evidence:", exportError);
+      addToast("Failed to generate export.", 'error');
+    }
+  };
+
   // Helper for rendering evidence cards
   const renderEvidenceCard = (evidence: EvidenceCard, dictionary: any) => {
     const cardId = evidence.id;
@@ -583,11 +630,11 @@ export default function ReportPage({
         ) : (
           <div>
             <div className="p-4 border-b border-border">
+              <p className="text-xs py-0.5 mb-2 text-text-muted">Competency: {competencyName}</p>
               <div className="flex items-center gap-2 mb-1">
                 <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-semibold">Level {evidence.level}</span>
                 <p className="text-sm font-medium text-text-primary leading-snug">{evidence.kb}</p>
               </div>
-              <p className="text-xs text-text-muted">Competency: {competencyName}</p>
             </div>
             <div className="p-4">
               <blockquote className="border-l-4 border-primary pl-4 text-sm italic">"{evidence.quote}"</blockquote>
@@ -686,9 +733,86 @@ export default function ReportPage({
           {analysisTab === 'evidence' && (
             <div className="space-y-6">
               <div className="flex justify-between items-center">
-                <h3 className="text-lg font-semibold text-text-primary">Collected Evidence ({reportData.evidence.length})</h3>
+                <h3 className="text-lg font-semibold text-text-primary">Collected Evidence ({filteredEvidence.length})</h3>
                 <div className="flex items-center gap-3">
-                  <FilterButton />
+                  {/* --- FILTER BUTTON & DROPDOWN --- */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setIsFilterOpen(!isFilterOpen)}
+                      className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors flex items-center gap-2"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+                      Filter
+                      {/* Show a dot if filters are active */}
+                      {(filterCompetency || filterLevel || filterSource) && (
+                        <span className="w-2 h-2 bg-primary rounded-full"></span>
+                      )}
+                    </button>
+                    {isFilterOpen && (
+                      <div
+                        className="absolute right-0 top-full mt-2 w-72 bg-bg-light rounded-lg shadow-lg border border-border p-4 z-20 space-y-4"
+                        // Prevent modal from closing when clicking inside
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div>
+                          <label htmlFor="filter-comp" className="text-sm font-medium text-text-primary mb-1 block">Competency</label>
+                          <select
+                            id="filter-comp"
+                            className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
+                            value={filterCompetency}
+                            onChange={(e) => setFilterCompetency(e.target.value)}
+                          >
+                            <option value="">All Competencies</option>
+                            {/* Populate from dictionary */}
+                            {Array.from(competencyMap.entries()).map(([id, name]) => (
+                              <option key={id} value={id}>{name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="filter-level" className="text-sm font-medium text-text-primary mb-1 block">Level</label>
+                          <select 
+                            id="filter-level" 
+                            className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
+                            value={filterLevel}
+                            onChange={(e) => setFilterLevel(e.target.value)}
+                          >
+                            <option value="">All Levels</option>
+                            {/* Populate from unique levels in evidence */}
+                            {levelList.map((level: string) => (
+                              <option key={level} value={level}>{level}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="filter-source" className="text-sm font-medium text-text-primary mb-1 block">Source</label>
+                          <select
+                            id="filter-source"
+                            className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
+                            value={filterSource}
+                            onChange={(e) => setFilterSource(e.target.value)}
+                          >
+                            <option value="">All Sources</option>
+                            {/* Populate from raw files */}
+                            {sourceList.map(source => (
+                              <option key={source} value={source}>{source}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setFilterCompetency('');
+                            setFilterLevel('');
+                            setFilterSource('');
+                            setIsFilterOpen(false);
+                          }}
+                          className="w-full text-sm text-primary hover:underline"
+                        >
+                          Clear All Filters
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <button 
                     onClick={() => { 
                       setEvidenceToEdit(null);
@@ -704,21 +828,26 @@ export default function ReportPage({
                 </div>
               </div>
               
-              {/* --- NEW: Render REAL evidence cards --- */}
-              {reportData.evidence.length > 0 ? (
-                reportData.evidence.map(evidence =>
+              {/* --- Render filtered evidence cards --- */}
+              {filteredEvidence.length > 0 ? (
+                filteredEvidence.map(evidence =>
                   renderEvidenceCard(evidence, reportData.dictionary)
                 )
               ) : (
                 <div className="p-12 text-center text-text-muted border-2 border-dashed border-border rounded-md">
                   <h3 className="text-lg font-semibold">No Evidence Found</h3>
-                  <p className="text-sm mt-1">The AI could not find any evidence in the provided files. You can try creating evidence manually.</p>
+                  <p className="text-sm mt-1">
+                    {reportData.evidence.length > 0 ? "No evidence matches your current filters." : "The AI could not find any evidence in the provided files."}
+                  </p>
                 </div>
               )}
               
               {/* (U43) Generate Next Button */}
               <div className="pt-4 flex justify-end gap-3" hidden={isViewOnly}>
-                <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-5 py-2.5 hover:bg-bg-medium flex items-center gap-2">
+                <button 
+                  onClick={handleExportEvidence}
+                  className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-5 py-2.5 hover:bg-bg-medium flex items-center gap-2"
+                >
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   Export List
                 </button>
@@ -741,7 +870,6 @@ export default function ReportPage({
               {/* --- This is still placeholder content --- */}
               <div className="flex justify-between items-center">
                 <h3 className="text-lg font-semibold text-text-primary">Competency Analysis</h3>
-                <FilterButton />
               </div>
               <div className="p-12 text-center text-text-muted border-2 border-dashed border-border rounded-md">
                 <h3 className="text-lg font-semibold">Coming Soon</h3>
@@ -771,7 +899,10 @@ export default function ReportPage({
 
   return (
     <>
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+      <div 
+        className="flex-1 flex flex-col h-screen overflow-hidden"
+        onClick={() => { if (isFilterOpen) setIsFilterOpen(false); }}
+      >
         {/* Header (U28, U29, U30) */}
         <header className="flex-shrink-0 flex items-center justify-between h-16 px-6 border-b border-border bg-bg-light z-10">
           <div>
@@ -845,58 +976,44 @@ export default function ReportPage({
                 </nav>
               </div>
               <div className="flex-grow overflow-y-auto">
-                {reportData?.rawFiles && reportData.rawFiles.map(file => (
-                  <div 
-                    key={file.id}
-                    className="p-6 font-mono text-sm text-text-secondary"
-                    // Show only the active tab's content
-                    style={{ display: rawTextTab === file.id ? 'block' : 'none' }} 
-                  >
-                    {/* We can split by newline to simulate line numbers */}
-                    {reportData?.rawFiles && reportData.rawFiles.map(file => {
-                      let content: ReactNode;
+                {reportData?.rawFiles && reportData.rawFiles.map(file => {
+                  
+                  let content: ReactNode;
 
-                      // Check if this file is the active one AND we have a quote to highlight
-                      if (activeFileId === file.id && activeQuote) {
-                        // Split the content by the quote
-                        const parts = file.file_content.split(activeQuote);
+                  if (activeFileId === file.id && activeQuote) {
+                    const parts = file.file_content.split(activeQuote);
+                    content = (
+                      <div className="whitespace-pre-wrap">
+                        {parts.map((part, index) => (
+                          <span key={index}>
+                            {part}
+                            {index < parts.length - 1 && (
+                              <mark id={`highlight-${index}`} className="evidence-highlight">
+                                {activeQuote}
+                              </mark>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    );
+                  } else {
+                    content = (
+                      <div className="whitespace-pre-wrap">
+                        {file.file_content}
+                      </div>
+                    );
+                  }
 
-                        // Rebuild the content, interleaving <mark> tags
-                        content = (
-                          <div className="whitespace-pre-wrap">
-                            {parts.map((part, index) => (
-                              <span key={index}>
-                                {part}
-                                {index < parts.length - 1 && (
-                                  <mark id={`highlight-${index}`} className="evidence-highlight">
-                                    {activeQuote}
-                                  </mark>
-                                )}
-                              </span>
-                            ))}
-                          </div>
-                        );
-                      } else {
-                        // Otherwise, just render the plain text
-                        content = (
-                          <div className="whitespace-pre-wrap">
-                            {file.file_content}
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <div
-                          key={file.id}
-                          className="p-6 font-mono text-sm text-text-secondary"
-                          style={{ display: rawTextTab === file.id ? 'block' : 'none' }}
-                        >
-                          {content}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                  return (
+                    <div
+                      key={file.id}
+                      className="p-6 font-mono text-sm text-text-secondary"
+                      style={{ display: rawTextTab === file.id ? 'block' : 'none' }}
+                    >
+                      {content}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -965,7 +1082,7 @@ export default function ReportPage({
         addToast={addToast}
       />
 
-      {/* View Context Modal (U29) */}
+      {/* (RP-7.2) View Context Modal */}
       {modals.viewContext && (
         <div className="fixed inset-0 z-30 pointer-events-none">
           <div className="fixed inset-0 bg-black/20 pointer-events-auto" onClick={() => closeModal('viewContext')}></div>
@@ -975,21 +1092,33 @@ export default function ReportPage({
               <button className="text-text-muted hover:text-text-primary" onClick={() => closeModal('viewContext')}>&times;</button>
             </div>
             <div className="flex-grow p-6 space-y-6 overflow-y-auto">
-              <div>
-                <label className="text-sm font-medium text-text-muted">Report Title</label>
-                <p className="text-text-primary font-medium">Analysis of Candidate A</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-text-muted">Files Uploaded</label>
-                <ul className="list-disc list-outside pl-5 mt-2 space-y-1 text-sm">
-                  <li><span className="text-text-primary">candidate_A_case_study.pdf</span> (Case Study)</li>
-                  <li><span className="text-text-primary">candidate_A_roleplay.mp3</span> (Roleplay)</li>
-                </ul>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-text-muted">Additional Specific Context</label>
-                <p className="text-sm text-text-secondary mt-1 p-3 bg-bg-medium rounded-md">Candidate is an internal applicant for a team lead position. Focus on leadership and communication is paramount.</p>
-              </div>
+              {reportData ? (
+                <>
+                  <div>
+                    <label className="text-sm font-medium text-text-muted">Report Title</label>
+                    <p className="text-text-primary font-medium">{reportData.title}</p>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-text-muted">Files Uploaded</label>
+                    <ul className="list-disc list-outside pl-5 mt-2 space-y-1 text-sm">
+                      {reportData.rawFiles.map(file => (
+                        <li key={file.id}>
+                          <span className="text-text-primary">{file.file_name}</span> ({file.simulation_method_tag})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-text-muted">Additional Specific Context</label>
+                    {/* TODO: Add 'specific_context' to GET /reports/:id/data endpoint and display here */}
+                    <p className="text-sm text-text-secondary mt-1 p-3 bg-bg-medium rounded-md">
+                      (Placeholder: Specific context will be shown here)
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <p>Loading report data...</p>
+              )}
               <button 
                 onClick={() => { closeModal('viewContext'); openModal('projectContext'); }}
                 className="w-full bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors"
@@ -1001,7 +1130,14 @@ export default function ReportPage({
         </div>
       )}
 
-      {/* (FIXED) Ask AI Modal (U49) */}
+      {/* --- REPLACE Project Context Modal --- */}
+      <ProjectContextModal
+        isOpen={modals.projectContext}
+        onClose={() => closeModal('projectContext')}
+        projectId={reportData?.projectId || ''}
+      />
+
+      {/* Ask AI Modal (U49) */}
       {modals.askAI && (
         <div className="fixed inset-0 z-30 pointer-events-none">
           <div className="fixed inset-0 bg-black/20 pointer-events-auto" onClick={() => closeModal('askAI')}></div>

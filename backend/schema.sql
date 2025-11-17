@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(255);
+
 -- (FR-PROJ-001) Projects Table
 CREATE TABLE IF NOT EXISTS projects (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

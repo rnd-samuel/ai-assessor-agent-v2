@@ -6,6 +6,7 @@ import { jwtDecode } from 'jwt-decode';
 interface DecodedToken {
   userId: string;
   role: 'User' | 'Project Manager' | 'Admin';
+  name: string;
   iat: number;
   exp: number;
 }
@@ -14,10 +15,11 @@ interface DecodedToken {
 interface UserState {
   userId: string | null;
   role: 'User' | 'Project Manager' | 'Admin' | null;
+  name: string | null;
   isAuthenticated: boolean;
 
   // Actions: Functions to update the state
-  setUser: (userId: string, role: 'User' | 'Project Manager' | 'Admin') => void;
+  setUser: (userId: string, role: 'User' | 'Project Manager' | 'Admin', name: string) => void;
   clearUser: () => void;
   initialize: () => void;
 }
@@ -27,13 +29,15 @@ export const useUserStore = create<UserState>((set) => ({
   // --- Default State ---
   userId: null,
   role: null,
+  name: null,
   isAuthenticated: false,
 
   // --- Actions ---
-  setUser: (userId, role) =>
+  setUser: (userId, role, name) =>
     set({
       userId: userId,
       role: role,
+      name: name,
       isAuthenticated: true,
     }),
 
@@ -41,6 +45,7 @@ export const useUserStore = create<UserState>((set) => ({
     set({
       userId: null,
       role: null,
+      name: null,
       isAuthenticated: false,
     }),
   initialize: () => {
@@ -55,6 +60,7 @@ export const useUserStore = create<UserState>((set) => ({
           set({
             userId: decoded.userId,
             role: decoded.role,
+            name: decoded.name,
             isAuthenticated: true
           });
         } else {

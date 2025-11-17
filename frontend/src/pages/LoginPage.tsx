@@ -25,10 +25,10 @@ export default function LoginPage() {
       });
 
       // 2. On success, get data from the response
-      const { userId, role, token } = response.data;
+      const { userId, role, token, name } = response.data;
 
       // 3. Update our global zustand store (U2)
-      setUser(userId, role);
+      setUser(userId, role, name);
 
       // 4. Store the auth token in localStorage for persistence
       // This ensures the user stays logged in if they refresh the page

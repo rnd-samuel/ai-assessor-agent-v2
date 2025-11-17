@@ -300,7 +300,7 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
     if (userRole === 'Admin' || userRole === 'Project Manager') {
       // (P17) Admins/PMs see ALL reports for the project
       sqlQuery = `
-         SELECT r.id, r.created_at, r.title, u.email as user_email, (r.creator_id = $1) as can_archive
+         SELECT r.id, r.created_at, r.title, u.name as user_name, (r.creator_id = $1) as can_archive
          FROM reports r
          JOIN users u ON r.creator_id = u.id
          WHERE r.project_id = $2 AND r.is_archived = false
@@ -309,7 +309,7 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
     } else {
       // (U17) Users only see their OWN reports
       sqlQuery = `
-         SELECT r.id, r.created_at, r.title, u.email as user_email, true as can_archive
+         SELECT r.id, r.created_at, r.title, u.name as user_name, true as can_archive
          FROM reports r
          JOIN users u ON r.creator_id = u.id
          WHERE r.project_id = $1 AND r.creator_id = $2 AND r.is_archived = false
@@ -334,7 +334,7 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
       id: r.id,
       date: new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       title: r.title,
-      user: r.user_email,
+      user: r.user_name,
       canArchive: r.can_archive
     }));
 
@@ -378,7 +378,7 @@ router.get('/:id/reports/archived', authenticateToken, async (req: Authenticated
 
     if (userRole === 'Admin' || userRole === 'Project Manager') {
       sqlQuery = `
-         SELECT r.id, r.created_at, r.title, u.email as user_email, (r.creator_id = $1) as can_archive
+         SELECT r.id, r.created_at, r.title, u.name as user_name, (r.creator_id = $1) as can_archive
          FROM reports r
          JOIN users u ON r.creator_id = u.id
          WHERE r.project_id = $2 AND r.is_archived = true
@@ -386,7 +386,7 @@ router.get('/:id/reports/archived', authenticateToken, async (req: Authenticated
       params.push(userId, projectId);
     } else {
       sqlQuery = `
-         SELECT r.id, r.created_at, r.title, u.email as user_email, true as can_archive
+         SELECT r.id, r.created_at, r.title, u.name as user_name, true as can_archive
          FROM reports r
          JOIN users u ON r.creator_id = u.id
          WHERE r.project_id = $1 AND r.creator_id = $2 AND r.is_archived = true
@@ -410,7 +410,7 @@ router.get('/:id/reports/archived', authenticateToken, async (req: Authenticated
       id: r.id,
       date: new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       title: r.title,
-      user: r.user_email,
+      user: r.user_name,
       canArchive: r.can_archive
     }));
 
@@ -609,6 +609,106 @@ router.get('/available-users', authenticateToken, async (req: AuthenticatedReque
   } catch (error) {
     console.error('Error fetching users:', error);
     res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * (RD-5.2) Get all context data for a specific project
+ */
+router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: projectId } = req.params;
+  const userId = req.user?.userId;
+
+  try {
+    // 1. Get Project, Creator, and Dictionary
+    const projectResult = await query(
+      `SELECT 
+         p.name as project_name,
+         p.dictionary_id,
+         u.email as creator_email,
+         cd.name as dictionary_name,
+         pp.general_context
+       FROM projects p
+       JOIN users u ON p.creator_id = u.id
+       LEFT JOIN competency_dictionaries cd ON p.dictionary_id = cd.id
+       LEFT JOIN project_prompts pp ON p.id = pp.project_id
+       WHERE p.id = $1`,
+      [projectId]
+    );
+
+    if (projectResult.rows.length === 0) {
+      return res.status(404).send({ message: "Project not found" });
+    }
+    const projectData = projectResult.rows[0];
+
+    // 2. Get Simulation Methods
+    const globalMethods = await query(
+      `SELECT gsm.name FROM global_simulation_methods gsm
+       JOIN projects_to_global_methods pgm ON gsm.id = pgm.method_id
+       WHERE pgm.project_id = $1`,
+      [projectId]
+    );
+    // TODO: Add project_simulation_methods query here when implemented
+
+    const simMethods = globalMethods.rows.map(r => r.name);
+
+    // 3. Get file-based data (Report Template, KB Files)
+    //    We will query the (not-yet-implemented) project_files table.
+    //    For now, this will correctly return empty arrays.
+
+    // TODO: Implement a 'project_files' table and query it here.
+    const reportTemplateResult = { rows: [] as any[] };
+    const knowledgeBaseResult = { rows: [] as any[] };
+
+    const reportTemplate = reportTemplateResult.rows.length > 0 ? {
+      name: reportTemplateResult.rows[0].file_name,
+      url: reportTemplateResult.rows[0].gcs_url
+    } : null;
+    const knowledgeBaseFiles = knowledgeBaseResult.rows.map(f => ({
+      name: f.file_name,
+      url: f.gcs_url
+    }));
+
+    // 4. Assemble and send response
+    res.status(200).json({
+      projectName: projectData.project_name,
+      projectManager: projectData.creator_email,
+      reportTemplate: reportTemplate,
+      knowledgeBaseFiles: knowledgeBaseFiles,
+      dictionaryTitle: projectData.dictionary_name || 'N/A',
+      dictionaryId: projectData.dictionary_id,
+      simulationMethods: simMethods,
+      generalContext: projectData.general_context || 'No general context provided.'
+    });
+
+  } catch (error) {
+    console.error("Error fetching project context:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * --- 2. ADD NEW ROUTE FOR DICTIONARY CONTENT ---
+ * (RP-7.2 / RD-5.2) Get the content of a specific competency dictionary
+ */
+router.get('/dictionary/:id/content', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: dictionaryId } = req.params;
+
+  try {
+    const result = await query(
+      `SELECT content FROM competency_dictionaries WHERE id = $1`,
+      [dictionaryId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).send({ message: "Dictionary not found" });
+    }
+
+    res.status(200).json(result.rows[0].content); // Send the raw JSON content
+
+  } catch (error) {
+    console.error("Error fetching dictionary content:", error);
+    res.status(500).send({ message: "Internal server error" });
   }
 });
 

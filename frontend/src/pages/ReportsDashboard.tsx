@@ -1,9 +1,11 @@
 // frontend/src/pages/ReportsDashboard.tsx
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useUserStore } from '../state/userStore';
 import { useParams, useNavigate } from 'react-router-dom';
 import apiService from '../services/apiService';
 import { useToastStore } from '../state/toastStore';
+import ProjectContextModal from '../components/ProjectContextModal';
+import { useProjectStore } from '../state/projectStore';
 
 // Define the Report type
 interface Report {
@@ -14,10 +16,21 @@ interface Report {
   canArchive: boolean;
 }
 
+// Define sort types
+type SortKey = 'date' | 'title' | 'user';
+type SortOrder = 'asc' | 'desc';
+
 export default function ReportsDashboard() {
   const role = useUserStore((state) => state.role);
   const { projectId } = useParams();
   const navigate = useNavigate();
+
+  const allProjects = useProjectStore((state) => state.projects);
+
+  const currentProjectName = useMemo(() => {
+    const project = allProjects.find(p => p.id === projectId);
+    return project ? project.name : 'Loading Project...';
+  }, [allProjects, projectId]);
 
   // Real Data State
   const [reports, setReports] = useState<Report[]>([]);
@@ -27,7 +40,6 @@ export default function ReportsDashboard() {
   // State for modals
   const [modals, setModals] = useState({
     projectContext: false,
-    dictionary: false,
     archive: false,
     unarchive: false,
   });
@@ -37,6 +49,10 @@ export default function ReportsDashboard() {
 
   // State for bulk actions (U16, P16)
   const [selectedReports, setSelectedReports] = useState<Set<string>>(new Set());
+
+  // State for sorting
+  const [sortKey, setSortKey] = useState<SortKey>('date');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
 
   // State for single-report actions and toasts
   const [reportToArchive, setReportToArchive] = useState<string | null>(null);
@@ -107,16 +123,6 @@ export default function ReportsDashboard() {
       newSelection.add(reportId);
     }
     setSelectedReports(newSelection);
-  };
-
-  // Handler for "Select All" checkbox
-  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>, reports: Report[]) => {
-    if (e.target.checked) {
-      const allIds = reports.filter(r => r.canArchive).map(r => r.id);
-      setSelectedReports(new Set(allIds));
-    } else {
-      setSelectedReports(new Set());
-    }
   };
 
   // Function to handle the archive API call
@@ -199,9 +205,110 @@ export default function ReportsDashboard() {
     }
   };
 
+  // Handler for sorting
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      // Toggle sort order
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      // Set new key and default to ascending
+      setSortKey(key);
+      setSortOrder('asc');
+    }
+  };
+
   const currentReports = showingArchived ? archivedReports : reports;
-  const eligibleToSelect = currentReports.filter(r => r.canArchive);
+
+  const sortedReports = useMemo(() => {
+    const reportsToSort = [...currentReports];
+
+    reportsToSort.sort((a, b) => {
+      let valA: string | number | Date;
+      let valB: string | number | Date;
+
+      switch (sortKey) {
+        case 'date':
+          valA = new Date(a.date);
+          valB = new Date(b.date);
+          break;
+        case 'title':
+          valA = a.title.toLowerCase();
+          valB = b.title.toLowerCase();
+          break;
+        case 'user':
+          valA = a.user?.toLowerCase() || '';
+          valB = b.user?.toLowerCase() || '';
+          break;
+        default:
+          return 0;
+      }
+      
+      if (valA < valB) {
+        return sortOrder === 'asc' ? -1 : 1;
+      }
+      if (valA > valB) {
+        return sortOrder === 'asc' ? 1 : -1;
+      }
+      return 0;
+    });
+
+    return reportsToSort;
+  }, [currentReports, sortKey, sortOrder]);
+
+  // Handler for "Select All" checkbox
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+      const allIds = sortedReports.filter(r => r.canArchive).map(r => r.id);
+      setSelectedReports(new Set(allIds));
+    } else {
+      setSelectedReports(new Set());
+    }
+  };
+
+  const eligibleToSelect = sortedReports.filter(r => r.canArchive);
   const allSelected = eligibleToSelect.length > 0 && selectedReports.size === eligibleToSelect.length;
+
+  // Helper component for sort arrows
+  const SortArrow = ({ columnKey }: { columnKey: SortKey }) => {
+    const isActive = sortKey === columnKey;
+    
+    return (
+      <svg 
+        xmlns="http://www.w3.org/2000/svg" 
+        width="16" 
+        height="16" 
+        viewBox="0 0 24 24" 
+        fill="none" 
+        stroke="currentColor" 
+        strokeWidth="2" 
+        strokeLinecap="round" 
+        strokeLinejoin="round" 
+        className="inline-block flex-shrink-0"
+      >
+        <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+        <path 
+          d="M9 18l3 3l3 -3" 
+          className={isActive && sortOrder === 'desc' ? 'text-text-primary' : 'text-text-muted/50'}
+          strokeWidth={isActive && sortOrder === 'desc' ? '3' : '2'}
+        />
+        <path 
+          d="M12 15v6" 
+          className={isActive && sortOrder === 'desc' ? 'text-text-primary' : 'text-text-muted/50'}
+          strokeWidth={isActive && sortOrder === 'desc' ? '3' : '2'}
+        />
+        <path 
+          d="M15 6l-3 -3l-3 3" 
+          className={isActive && sortOrder === 'asc' ? 'text-text-primary' : 'text-text-muted/50'}
+          strokeWidth={isActive && sortOrder === 'asc' ? '3' : '2'}
+        />
+        <path 
+          d="M12 3v6" 
+          className={isActive && sortOrder === 'asc' ? 'text-text-primary' : 'text-text-muted/50'}
+          strokeWidth={isActive && sortOrder === 'asc' ? '3' : '2'}
+        />
+      </svg>
+    );
+  };
 
   return (
     <>
@@ -210,7 +317,9 @@ export default function ReportsDashboard() {
         <div className="sticky top-0 bg-bg-medium/80 backdrop-blur-sm z-10">
           <div className="flex justify-between items-center p-8 pb-4">
             <div className="flex items-center gap-3">
-              <h1 className="text-3xl font-bold text-text-primary">Q4 Leadership Assessment</h1>
+              <h1 className="text-3xl font-bold text-text-primary">
+                {currentProjectName}
+              </h1>
               <button 
                 onClick={() => openModal('projectContext')}
                 className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors"
@@ -308,14 +417,29 @@ export default function ReportsDashboard() {
                       type="checkbox" 
                       className="w-4 h-4 rounded-sm border-border accent-primary"
                       checked={allSelected}
-                      onChange={(e) => handleSelectAll(e, currentReports)}
+                      onChange={handleSelectAll}
                     />
                   </th>
-                  <th className="p-3 font-semibold text-text-secondary w-1/5">Date</th>
-                  <th className="p-3 font-semibold text-text-secondary w-2/5">Title</th>
+                  <th className="p-3 font-semibold text-text-secondary w-1/5 cursor-pointer hover:bg-border/50" onClick={() => handleSort('date')}>
+                    <div className="flex items-center justify-between">
+                      <span>Date</span>
+                      <SortArrow columnKey="date" />
+                    </div>
+                  </th>
+                  <th className="p-3 font-semibold text-text-secondary w-2/5 cursor-pointer hover:bg-border/50" onClick={() => handleSort('title')}>
+                    <div className="flex items-center justify-between">
+                      <span>Title</span>
+                      <SortArrow columnKey="title" />
+                    </div>
+                  </th>
                   {/* (P16) User column only for PM/Admin */}
                   {(role === 'Project Manager' || role === 'Admin') && (
-                    <th className="p-3 font-semibold text-text-secondary w-1/5">User</th>
+                    <th className="p-3 font-semibold text-text-secondary w-1/5 cursor-pointer hover:bg-border/50" onClick={() => handleSort('user')}>
+                      <div className="flex items-center justify-between">
+                        <span>User</span>
+                        <SortArrow columnKey="user" />
+                      </div>
+                    </th>
                   )}
                   <th className="p-3 font-semibold text-text-secondary text-right pr-6 w-1/5">Actions</th>
                 </tr>
@@ -330,7 +454,7 @@ export default function ReportsDashboard() {
                 )}
 
                 {/* --- EMPTY STATE --- */}
-                {!isLoading && currentReports.length === 0 && (
+                {!isLoading && sortedReports.length === 0 && (
                   <tr>
                     <td colSpan={5} className="p-12 text-center text-text-muted">
                       {searchQuery.length > 0 ? (
@@ -344,7 +468,7 @@ export default function ReportsDashboard() {
                   </tr>
                 )}
                 {/* --- REAL DATA MAP --- */}
-                {!isLoading && currentReports.map((report) => {
+                {!isLoading && sortedReports.map((report) => { // Use sortedReports
                   return (
                     <tr key={report.id} className="border-b border-border">
                       <td className="p-3 w-12 text-center">
@@ -359,6 +483,7 @@ export default function ReportsDashboard() {
                       <td className="p-3 py-4 clickable-row" onClick={() => navigateToReport(report.id)}>{report.date}</td>
                       <td className="p-3 py-4 font-medium text-text-primary clickable-row" onClick={() => navigateToReport(report.id)}>{report.title}</td>
                       {(role === 'Project Manager' || role === 'Admin') && (
+                        // This will now display the user's name
                         <td className="p-3 py-4 clickable-row" onClick={() => navigateToReport(report.id)}>{report.user}</td>
                       )}
                       <td className="p-3 py-4 text-right pr-6">
@@ -397,57 +522,11 @@ export default function ReportsDashboard() {
       {/* Modals */}
 
       {/* Project Context Modal (U21) */}
-      {modals.projectContext && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-40">
-          <div className="w-full max-w-2xl bg-bg-light rounded-lg shadow-lg">
-            <div className="flex justify-between items-center p-6 border-b border-border">
-              <h3 className="text-lg font-semibold text-text-primary">Project Context: Q4 Leadership Assessment</h3>
-              <button className="text-text-muted hover:text-text-primary" onClick={() => closeModal('projectContext')}>&times;</button>
-            </div>
-            <div className="p-6 modal-body space-y-6">
-              {/* ... Modal content from mockup ... */}
-              <div>
-                <label className="text-xs font-semibold text-text-muted uppercase">Project Manager</label>
-                <p className="text-sm text-text-primary">Alice Johnson (admin@example.com)</p>
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-text-muted uppercase">Report Template</label>
-                <a href="#" className="flex items-center gap-2 text-sm text-primary hover:underline font-medium">... Download ...</a>
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-text-muted uppercase">Competency Dictionary</label>
-                <div className="bg-bg-medium rounded-lg border border-border p-3 mt-1">
-                  <div className="flex justify-between items-center">
-                    <p className="text-sm font-medium text-text-primary">Standard Leadership Dictionary (v2)</p>
-                    <button 
-                      onClick={() => openModal('dictionary')}
-                      className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-3 py-1.5 hover:bg-bg-light transition-colors"
-                    >
-                      View Content
-                    </button>
-                  </div>
-                </div>
-              </div>
-              {/* ... Other fields ... */}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Dictionary Modal (U21 Nested) */}
-      {modals.dictionary && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-4xl bg-bg-light rounded-lg shadow-lg">
-            <div className="flex justify-between items-center p-6 border-b border-border">
-              <h3 className="text-lg font-semibold text-text-primary">Standard Leadership Dictionary (v2)</h3>
-              <button className="text-text-muted hover:text-text-primary" onClick={() => closeModal('dictionary')}>&times;</button>
-            </div>
-            <div className="p-6 modal-body">
-              <p>...Full dictionary table from mockup would go here...</p>
-            </div>
-          </div>
-        </div>
-      )}
+      <ProjectContextModal
+        isOpen={modals.projectContext}
+        onClose={() => closeModal('projectContext')}
+        projectId={projectId || ''}
+      />
 
       {/* Archive Modal (U16) */}
       {modals.archive && (
