@@ -160,3 +160,48 @@ ALTER TABLE report_files
 DROP CONSTRAINT IF EXISTS chk_method_link,
 ALTER COLUMN global_method_id DROP NOT NULL,
 ALTER COLUMN project_method_id DROP NOT NULL;
+
+-- (RP-7.11) Phase 2: Competency Analysis Results
+CREATE TABLE IF NOT EXISTS competency_analysis (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  report_id UUID REFERENCES reports(id) ON DELETE CASCADE,
+  competency VARCHAR(255) NOT NULL,
+  
+  -- AI Assessment Data
+  level_achieved VARCHAR(50),
+  explanation TEXT,
+  development_recommendations TEXT,
+  
+  -- Store Key Behaviors status as JSON
+  -- Structure: [{ "kb": "...", "fulfilled": true/false, "evidenceIds": [] }]
+  key_behaviors_status JSONB DEFAULT '[]',
+  
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- (RP-7.14) Phase 3: Executive Summary
+CREATE TABLE IF NOT EXISTS executive_summary (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  report_id UUID REFERENCES reports(id) ON DELETE CASCADE,
+  
+  strengths TEXT,
+  areas_for_improvement TEXT,
+  recommendations TEXT,
+  
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- (ADM-8.7) Stores the actual content/files for global methods (e.g., the specific Case Study text)
+CREATE TABLE IF NOT EXISTS global_simulation_files (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  file_name VARCHAR(255) NOT NULL,
+  file_content TEXT, -- Storing text content directly for RAG/Checking
+  
+  -- Link to the tag (e.g., 'Case Study')
+  method_id UUID REFERENCES global_simulation_methods(id) ON DELETE CASCADE,
+  
+  created_by UUID REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);

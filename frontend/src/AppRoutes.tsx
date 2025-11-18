@@ -96,9 +96,7 @@ export default function AppRoutes() {
           path="/admin" 
           element={
             <ProtectedRoute>
-              <MainLayout>
                 <AdminPanelPage />
-              </MainLayout>
             </ProtectedRoute>
           } 
         />

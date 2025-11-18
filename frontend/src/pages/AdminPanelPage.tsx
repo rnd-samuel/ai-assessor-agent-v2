@@ -15,6 +15,7 @@ import {
 import flatpickr from 'flatpickr';
 import 'flatpickr/dist/flatpickr.min.css'; // Import the styles
 import Sidebar from '../components/Sidebar'; // <-- *** IMPORT THE SIDEBAR ***
+import apiService from '../services/apiService';
 
 // Register Chart.js components
 Chart.register(
@@ -59,6 +60,7 @@ export default function AdminPanelPage() {
     editUser: false,
     deleteUserConfirm: false,
     promptHistory: false,
+    selectSimMethod: false,
   });
 
   // (A15-A21) State for AI settings
@@ -68,6 +70,27 @@ export default function AdminPanelPage() {
   
   // (A5) State for Model Filter
   const [modelFilterOpen, setModelFilterOpen] = useState(false);
+
+  // State for Dictionaries
+  const [dictionaries, setDictionaries] = useState<{id: string, name: string, created_at: string}[]>([]);
+  const [isUploadingDict, setIsUploadingDict] = useState(false);
+
+  // State for Simulation Methods
+  const [simMethods, setSimMethods] = useState<{id: string, name: string}[]>([]);
+  const [newMethodName, setNewMethodName] = useState('');
+
+  // State for Simulation Files
+  const [simFiles, setSimFiles] = useState<{id: string, file_name: string, method_name: string}[]>([]);
+
+  // State for Users
+  const [users, setUsers] = useState<{id: string, name: string, email: string, role: string}[]>([]);
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'User' });
+
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+
+  // We need a temporary state to hold the file while the user selects the method
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [targetMethodId, setTargetMethodId] = useState('');
 
   // Refs for charts and datepicker
   const apiRequestsChartRef = useRef<HTMLCanvasElement>(null);
@@ -148,6 +171,198 @@ export default function AdminPanelPage() {
     // No cleanup function needed here as we want to preserve the instance
   }, [activeTab]);
 
+  const fetchDictionaries = async () => {
+    try {
+      const response = await apiService.get('/admin/dictionaries');
+      setDictionaries(response.data);
+    } catch (error) {
+      console.error("Failed to fetch dictionaries", error);
+    }
+  };
+
+  // Fetch when 'knowledge' tab is active
+  useEffect(() => {
+    if (activeTab === 'knowledge') {
+      fetchDictionaries();
+      fetchSimMethods();
+      fetchSimFiles();
+    }
+  }, [activeTab]);
+
+  const handleDictionaryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        setIsUploadingDict(true);
+        const jsonContent = JSON.parse(event.target?.result as string);
+
+        // Use filename (minus .json) as default name, or prompt user
+        const name = jsonContent.namaKamus || jsonContent.name || file.name.replace('.json', '');
+
+        await apiService.post('/admin/dictionaries', {
+          name: name,
+          content: jsonContent
+        });
+
+        alert('Dictionary uploaded successfully!');
+        fetchDictionaries();
+      } catch (error) {
+        console.error("Upload failed:", error);
+        alert("Invalid JSON file or upload failed.");
+      } finally {
+        setIsUploadingDict(false);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  const handleDeleteDictionary = async (id: string) => {
+    if(!window.confirm("Are you sure? This cannot be undone.")) return;
+
+    try {
+      await apiService.delete(`/admin/dictionaries/${id}`);
+      fetchDictionaries();
+    } catch (error: any) {
+      alert(error.response?.data?.message || "Failed to delete dictionary.");
+    }
+  };
+
+  const fetchSimMethods = async () => {
+    try {
+      const response = await apiService.get('/admin/simulation-methods');
+      setSimMethods(response.data);
+    } catch (error) {
+      console.error("Failed to fetch methods", error);
+    }
+  };
+
+  const handleCreateMethod = async () => {
+    if (!newMethodName.trim()) return;
+    try {
+      await apiService.post('/admin/simulation-methods', { name: newMethodName });
+      setNewMethodName('');
+      closeModal('addSimMethod');
+      fetchSimMethods();
+      alert("Method created!");
+    } catch (error: any) {
+      alert(error.response?.data?.message || "Failed to create method.");
+    }
+  };
+
+  const handleDeleteMethod = async (id: string) => {
+    if(!window.confirm("Delete this simulation method?")) return;
+    try {
+      await apiService.delete(`/admin/simulation-methods/${id}`);
+      fetchSimMethods();
+    } catch (error: any) {
+      alert (error.response?.data?.message || "Failed to delete method.");
+    }
+  };
+
+  const fetchSimFiles = async () => {
+    try {
+      const response = await apiService.get('/admin/simulation-files');
+      setSimFiles(response.data);
+    } catch (error) {
+      console.error("Failed to fetch sim files", error);
+    }
+  };
+
+  const handleSimFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setPendingFile(e.target.files[0]);
+      openModal('selectSimMethod');
+    }
+  };
+
+  const confirmSimFileUpload = async () => {
+    if (!pendingFile || !targetMethodId) return;
+
+    const formData = new FormData();
+    formData.append('file', pendingFile);
+    formData.append('methodId', targetMethodId);
+
+    try {
+      await apiService.post('/admin/simulation-files', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      alert("File uploaded successfully!");
+      closeModal('selectSimMethod');
+      setPendingFile(null);
+      setTargetMethodId('');
+      fetchSimFiles();
+    } catch (error) {
+      console.error("Upload failed", error);
+      alert("Failed to upload file.");
+    }
+  };
+
+  const handleDeleteSimFile = async (id: string) => {
+    if(!confirm("Delete this file?")) return;
+    await apiService.delete(`/admin/simulation-files/${id}`);
+    fetchSimFiles();
+  };
+
+  const fetchUsers = async () => {
+    try {
+      const response = await apiService.get('/admin/users');
+      setUsers(response.data);
+    } catch (error) {
+      console.error("Failed to fetch users", error);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'user_management') {
+      fetchUsers();
+    }
+  }, [activeTab]);
+
+  const handleAddUser = async () => {
+    if (!newUser.email || !newUser.password || !newUser.name) {
+      alert("Please fill all fields.");
+      return;
+    }
+    try {
+      // Using the public register route is fine for now, or you could make a protected admin one.
+      await apiService.post('/auth/register', newUser);
+      alert("User added successfully!");
+      closeModal('addUser');
+      setNewUser({ name: '', email: '', password: '', role: 'User' }); // Reset form
+      fetchUsers();
+    } catch (error: any) {
+      alert(error.response?.data?.message || "Failed to create user.");
+    }
+  };
+
+  const handleEditUser = async () => {
+    if (!editingUserId) return;
+
+    try {
+      await apiService.put(`/admin/users/${editingUserId}`, newUser);
+      alert("User updated successfully!");
+
+      closeModal('editUser');
+      setEditingUserId(null);
+      setNewUser({ name: '', email: '', password: '', role: 'User' }); // Reset form
+      fetchUsers(); // Refresh list
+    } catch (error: any) {
+      alert(error.response?.data?.message || "Failed to update user.");
+    }
+  };
+
+  const handleDeleteUser = async (id: string) => {
+    if(!confirm("Are you sure you want to delete this users?")) return;
+    try {
+      await apiService.delete(`/admin/users/${id}`);
+      fetchUsers();
+    } catch (error: any) {
+      alert(error.response?.data?.message || "Failed to delete user.");
+    }
+  };
 
   return (
     // This is the root layout
@@ -330,36 +545,100 @@ export default function AdminPanelPage() {
                 </div>
               </div>
               {/* Competency Dictionaries (A13) */}
-              <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border space-y-4">
-                <h4 className="text-md font-semibold text-text-primary">Competency Dictionaries</h4>
-                <p className="text-sm text-text-muted">Upload competency definitions (.json format). These will be selectable when creating projects.</p>
-                <FileUploader types="JSON only" />
-                <div>
-                  <input type="text" placeholder="Search dictionaries..." className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm mb-2"/>
-                  <ul className="space-y-2">
-                    <li className="flex justify-between items-center text-sm p-3 border border-border rounded-md hover:bg-bg-medium cursor-pointer" onClick={() => openModal('editDictionary')}>
-                      <div>
-                        <span className="font-medium text-text-primary">Standard Leadership Dictionary v2</span>
-                        <span className="text-xs text-text-muted ml-2">(Added: Oct 20, 2025)</span>
-                      </div>
-                      <button onClick={(e) => { e.stopPropagation(); openModal('deleteDictionaryConfirm'); }} className="text-xs text-error/80 hover:text-error">Delete</button>
-                    </li>
-                  </ul>
-                </div>
+              <div
+                className="w-full border-2 border-dashed border-border rounded-lg bg-bg-medium p-8 text-center cursor-pointer hover:border-primary"
+                onClick={() => document.getElementById('dict-upload')?.click()}
+              >
+                <input 
+                  type="file"
+                  id="dict-upload"
+                  className="hidden"
+                  accept=".json"
+                  onChange={handleDictionaryUpload}
+                  disabled={isUploadingDict}
+                />
+                <p className="text-sm font-semibold text-text-secondary">
+                  {isUploadingDict ? "Uploading..." : "Click to upload JSON dictionary"}
+                </p>
+              </div>
+
+              <div>
+                <h5 className="text-sm font-medium text-text-primary mb-2">Existing Dictionaries:</h5>
+                <ul className="space-y-2">
+                  {dictionaries.length === 0 ? (
+                    <li className="text-sm text-text-muted italic">No dictionaries found.</li>
+                  ) : (
+                    dictionaries.map(dict => (
+                      <li key={dict.id} className="flex justify-between items-center text-sm p-3 border border-border rounded-md hover:bg-bg-medium">
+                        <div>
+                          <span className="font-medium text-text-primary">{dict.name}</span>
+                          <span className="text-xs text-text-muted ml-2">
+                            (Added: {new Date(dict.created_at).toLocaleDateString()})
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteDictionary(dict.id)}
+                          className="text-xs text-error/80 hover:text-error font-medium px-2 py-1"
+                        >
+                          Delete
+                        </button>
+                      </li>
+                    ))
+                  )}
+                </ul>
               </div>
               {/* Simulation Methods Data (A14) */}
               <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border space-y-4">
                 <h4 className="text-md font-semibold text-text-primary">Simulation Methods Data</h4>
-                <p className="text-sm text-text-muted">Upload data files (.pdf, .docx, .txt) associated with specific simulation methods.</p>
-                <FileUploader types="PDF, DOCX, or TXT" />
-                <button onClick={() => openModal('addSimMethod')} className="text-sm text-primary hover:underline">+ Add New Simulation Method Type</button>
+                <p className="text-sm text-text-muted">Upload data files (.pdf, .docx, .txt) and link them to a method.</p>
+                
+                {/* File Uploader */}
+                <div
+                  className="w-full border-2 border-dashed border-border rounded-lg bg-bg-medium p-8 text-center cursor-pointer hover:border-primary"
+                  onClick={() => document.getElementById('sim-file-upload')?.click()}
+                >
+                  <input 
+                    type="file"
+                    id="sim-file-upload"
+                    className="hidden"
+                    accept=".pdf,.docx,.txt"
+                    onChange={handleSimFileSelect}
+                  />
+                  <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
+                </div>
+                  
                 <div>
                   <h5 className="text-sm font-medium text-text-primary mb-2">Uploaded Method Data:</h5>
                   <ul className="space-y-2">
-                    <li className="flex justify-between items-center text-sm p-2 bg-bg-medium rounded-md">
-                      <span>CaseStudy_MarketEntry.pdf (Case Study)</span>
-                      <button className="text-xs text-primary hover:underline">Download</button>
-                    </li>
+                    {simFiles.map(file => (
+                      <li key={file.id} className="flex justify-between items-center text-sm p-2 bg-bg-medium rounded-md">
+                        <span>{file.file_name} <span className="text-text-muted text-xs">({file.method_name})</span></span>
+                        <button onClick={() => handleDeleteSimFile(file.id)} className="text-xs text-error hover:underline">Delete</button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <button
+                  onClick={() => openModal('addSimMethod')}
+                  className="text-sm text-primary hover:underline font-medium"
+                >
+                  + Add New Simulation Method
+                </button>
+
+                <div>
+                  <h5 className="text-sm font-medium text-text-primary mb-2">Available Methods:</h5>
+                  <ul className="space-y-2">
+                    {simMethods.map(method => (
+                      <li key={method.id} className="flex justify-between items-center text-sm p-3 border border-border rounded-md bg-bg-medium/30">
+                        <span className="text-text-primary">{method.name}</span>
+                        <button
+                          onClick={() => handleDeleteMethod(method.id)}
+                          className="text-xs text-error/80 hover:text-error"
+                        >
+                          Delete
+                        </button>
+                      </li>
+                    ))}
                   </ul>
                 </div>
               </div>
@@ -472,7 +751,14 @@ export default function AdminPanelPage() {
             <div className="space-y-6">
               <div className="flex justify-between items-center">
                 <h3 className="text-lg font-semibold text-text-primary">User Management</h3>
-                <button onClick={() => openModal('addUser')} className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover flex items-center gap-2">
+                <button 
+                  onClick={() => {
+                    setEditingUserId(null);
+                    setNewUser({ name: '', email: '', password: '', role: 'User' });
+                    openModal('addUser')
+                  }}
+                  className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover flex items-center gap-2"
+                >
                   + Add User
                 </button>
               </div>
@@ -482,32 +768,51 @@ export default function AdminPanelPage() {
                   <thead>
                     <tr className="bg-bg-medium border-b border-border">
                       <th className="p-3 font-semibold text-text-secondary">User Name</th>
+                      <th className="p-3 font-semibold text-text-secondary">User E-mail</th>
                       <th className="p-3 font-semibold text-text-secondary">User Role</th>
                       <th className="p-3 font-semibold text-text-secondary text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr className="border-b border-border hover:bg-bg-medium cursor-pointer" onClick={() => openModal('editUser')}>
-                      <td className="p-3 font-medium text-text-primary">Admin User</td>
-                      <td className="p-3"><span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">Admin</span></td>
-                      <td className="p-3 text-right">
-                        <button onClick={(e) => { e.stopPropagation(); openModal('deleteUserConfirm'); }} className="text-xs text-error/80 hover:text-error">Delete</button>
-                      </td>
-                    </tr>
-                    <tr className="border-b border-border hover:bg-bg-medium cursor-pointer" onClick={() => openModal('editUser')}>
-                      <td className="p-3 font-medium text-text-primary">Jane Doe</td>
-                      <td className="p-3"><span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-800">Project Manager</span></td>
-                      <td className="p-3 text-right">
-                        <button onClick={(e) => { e.stopPropagation(); openModal('deleteUserConfirm'); }} className="text-xs text-error/80 hover:text-error">Delete</button>
-                      </td>
-                    </tr>
-                    <tr className="hover:bg-bg-medium cursor-pointer" onClick={() => openModal('editUser')}>
-                      <td className="p-3 font-medium text-text-primary">John Smith</td>
-                      <td className="p-3"><span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-800">User</span></td>
-                      <td className="p-3 text-right">
-                        <button onClick={(e) => { e.stopPropagation(); openModal('deleteUserConfirm'); }} className="text-xs text-error/80 hover:text-error">Delete</button>
-                      </td>
-                    </tr>
+                    {users.map(user => (
+                      <tr key={user.id} 
+                        className="border-b border-border hover:bg-bg-medium cursor-pointer"
+                        onClick={() => {
+                          setEditingUserId(user.id);
+                          setNewUser({
+                            name: user.name,
+                            email: user.email,
+                            role: user.role,
+                            password: ''
+                          });
+
+                          openModal('editUser');
+                        }}
+                      >
+                        <td className="p-3 font-medium text-text-primary">{user.name}</td>
+                        <td className="p-3 font-medium text-text-secondary">{user.email}</td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                            user.role === 'Admin' ? 'bg-blue-100 text-blue-800' :
+                            user.role === 'Project Manager' ? 'bg-purple-100 text-purple-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {user.role}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteUser(user.id);
+                            }}
+                            className="text-xs text-error/80 hover:text-error"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -595,45 +900,153 @@ export default function AdminPanelPage() {
         </div>
       )}
 
-      {/* Add/Edit User Modal (A22, A23, A24) */}
+      {/* Add/Edit User Modal */}
       {(modals.addUser || modals.editUser) && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-40" onClick={() => { closeModal('addUser'); closeModal('editUser'); }}>
-          <div className="w-full max-w-lg bg-bg-light rounded-lg shadow-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-40">
+          {/* Close on backdrop click */}
+          <div className="fixed inset-0" onClick={() => { closeModal('addUser'); closeModal('editUser'); }}></div>
+          
+          <div className="w-full max-w-lg bg-bg-light rounded-lg shadow-lg relative z-50">
             <div className="flex items-center justify-between p-6 border-b border-border">
-              <h3 className="text-xl font-semibold text-text-primary">{modals.addUser ? 'Add New User' : 'Edit User Details'}</h3>
-              <button className="text-text-muted hover:text-text-primary" onClick={() => { closeModal('addUser'); closeModal('editUser'); }}>&times;</button>
+              <h3 className="text-xl font-semibold text-text-primary">
+                {modals.addUser ? 'Add New User' : 'Edit User Details'}
+              </h3>
+              <button 
+                className="text-text-muted hover:text-text-primary" 
+                onClick={() => { closeModal('addUser'); closeModal('editUser'); }}
+              >
+                &times;
+              </button>
             </div>
+
             <div className="p-6 space-y-4">
+              {/* Name Input */}
               <div>
-                <label htmlFor="user-name" className="block text-sm font-medium text-text-secondary mb-1">User Name:</label>
-                <input type="text" id="user-name" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm" />
+                <label className="block text-sm font-medium text-text-secondary mb-1">User Name:</label>
+                <input 
+                  type="text" 
+                  className="w-full rounded-md border border-border px-3 py-2 bg-bg-light shadow-sm text-sm"
+                  value={newUser.name}
+                  onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+                  placeholder="e.g. John Doe"
+                />
               </div>
+
+              {/* Email Input */}
               <div>
-                <label htmlFor="user-email" className="block text-sm font-medium text-text-secondary mb-1">User Email:</label>
-                <input type="email" id="user-email" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm" />
+                <label className="block text-sm font-medium text-text-secondary mb-1">User Email:</label>
+                <input 
+                  type="email" 
+                  className="w-full rounded-md border border-border px-3 py-2 bg-bg-light shadow-sm text-sm"
+                  value={newUser.email}
+                  onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                  placeholder="john@company.com"
+                />
               </div>
+
+              {/* Password Input */}
               <div>
-                <label htmlFor="user-password" className="block text-sm font-medium text-text-secondary mb-1">Password:</label>
-                <input type="password" id="user-password" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm" placeholder={modals.editUser ? 'Leave blank to keep current' : ''}/>
+                <label className="block text-sm font-medium text-text-secondary mb-1">Password:</label>
+                <input 
+                  type="password" 
+                  className="w-full rounded-md border border-border px-3 py-2 bg-bg-light shadow-sm text-sm"
+                  value={newUser.password}
+                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                  placeholder={modals.editUser ? 'Leave blank to keep current' : 'Enter password'}
+                />
               </div>
+
+              {/* Role Select */}
               <div>
-                <label htmlFor="user-role" className="block text-sm font-medium text-text-secondary mb-1">User Role:</label>
-                <select id="user-role" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
-                  <option value="user">User</option>
-                  <option value="project manager">Project Manager</option>
-                  <option value="admin">Admin</option>
+                <label className="block text-sm font-medium text-text-secondary mb-1">User Role:</label>
+                <select 
+                  className="w-full rounded-md border border-border px-3 py-2 bg-bg-light shadow-sm text-sm"
+                  value={newUser.role}
+                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                >
+                  <option value="User">User</option>
+                  <option value="Project Manager">Project Manager</option>
+                  <option value="Admin">Admin</option>
                 </select>
               </div>
             </div>
+
             <div className="p-4 bg-bg-medium border-t border-border flex justify-end gap-3">
-              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2" onClick={() => { closeModal('addUser'); closeModal('editUser'); }}>Cancel</button>
-              <button className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2">{modals.addUser ? 'Add User' : 'Save Changes'}</button>
+              <button 
+                className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" 
+                onClick={() => { closeModal('addUser'); closeModal('editUser'); }}
+              >
+                Cancel
+              </button>
+              
+              {/* This button now calls handleAddUser */}
+              <button 
+                className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover"
+                onClick={modals.addUser ? handleAddUser : handleEditUser}
+              >
+                {modals.addUser ? 'Add User' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Simulation Method Modal */}
+      {modals.addSimMethod && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
+            <h3 className="text-lg font-semibold text-text-primary">Add New Simulation Method</h3>
+            <div className="mt-4">
+              <label className="text-sm font-medium mb-1 block">Method Name</label>
+              <input 
+                type="text"
+                className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
+                placeholder="e.g. Group Discussion"
+                value={newMethodName}
+                onChange={(e) => setNewMethodName(e.target.value)}
+              />
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('addSimMethod')}>Cancel</button>
+              <button className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover" onClick={handleCreateMethod}>Add Method</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Modal: Select Method for Uploaded File */}
+      {modals.selectSimMethod && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
+            <h3 className="text-lg font-semibold text-text-primary">Link File to Method</h3>
+            <p className="text-sm text-text-secondary mt-2">Which simulation method is <strong>{pendingFile?.name}</strong> for?</p>
+
+            <div className="mt-4">
+              <select
+                className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
+                value={targetMethodId}
+                onChange={(e) => setTargetMethodId(e.target.value)}
+              >
+                <option value="">Select a method...</option>
+                {simMethods.map(m => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-3 mt-6">
+              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('selectSimMethod')}>Cancel</button>
+              <button
+                className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover disabled:opacity-50"
+                disabled={!targetMethodId}
+                onClick={confirmSimFileUpload}
+              >
+                Upload
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ... (Other modals: editDictionary, deleteDictionaryConfirm, addSimMethod, deleteUserConfirm, promptHistory) ... */}
+      {/* ... (Other modals: deleteUserConfirm, promptHistory) ... */}
 
     </div>
   );

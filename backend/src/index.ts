@@ -10,6 +10,7 @@ import authRoutes from './routes/auth.routes';
 import { authenticateToken, authorizeRole } from './middleware/auth.middleware';
 import projectsRoutes from './routes/projects.routes';
 import reportsRoutes from './routes/reports.routes';
+import adminRoutes from './routes/admin.routes';
 
 import { Job } from 'bullmq';
 
@@ -97,6 +98,7 @@ aiGenerationQueueEvents.on('failed', async (args: { jobId: string, failedReason:
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectsRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.get('/api/protected-test', authenticateToken, (req: any, res) => {
   res.send({

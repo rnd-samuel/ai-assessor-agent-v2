@@ -34,23 +34,16 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     // (U22, U25, U26) Save all the data from the New Report Page
     const result = await query(
-      `INSERT INTO reports (title, project_id, creator_id, target_levels, specific_context)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      [title, projectId, creatorId, JSON.stringify(targetLevels), specificContext]
+        `INSERT INTO reports (title, project_id, creator_id, target_levels, specific_context, status)
+        VALUES ($1, $2, $3, $4, $5, 'CREATED')
+        RETURNING id`,
+        [title, projectId, creatorId, JSON.stringify(targetLevels), specificContext]
     );
 
     const newReportId = result.rows[0].id;
 
-    // (NR-6.4) Queue the Phase 1 AI generation job
-    // The worker needs to know which report to work on and who to notify
-    await aiGenerationQueue.add('generate-phase-1', {
-      reportId: newReportId,
-      userId: creatorId
-    });
-
     res.status(201).json({
-      message: "Report record created. Generation started.",
+      message: "Report record created. Waiting for manual trigger.",
       reportId: newReportId
     });
 
@@ -81,7 +74,9 @@ router.post('/:id/upload', authenticateToken, upload.single('file'), async (req:
     const gcsPath = `mock/gcs/path/for/${file.originalname}`;
 
     // Read file content as text (FOR MOCKING ONLY)
-    const fileContent = file.buffer.toString('utf-8');
+    // TODO: REFACTOR - Implement real PDF/DOCX text extraction.
+    // Currently stripping null bytes to avoid Postgres "invalid byte sequence" error.
+    const fileContent = file.buffer.toString('utf-8').replace(/\0/g, '');
 
     // (RP-7.3) Save file metadata to the database
     await query(
@@ -197,19 +192,20 @@ router.put('/:id/unarchive', authenticateToken, async (req: AuthenticatedRequest
 
 /**
  * (RP-7.1, RP-7.4) Get all data for a single report page
- * This is the main data loader for the ReportPage.
+ * Updated to include phase progress detection
  */
 router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const { id: reportId } = req.params;
   const userId = req.user?.userId;
+  const userRole = req.user?.role;
 
   try {
-    // Get the report details (and check if user has access)
+    // 1. Get Report Details
     const reportResult = await query(
       `SELECT 
          r.title, 
          r.status, 
-         r.creator_id,
+         r.creator_id, 
          r.project_id,
          p.creator_id as project_creator_id,
          p.dictionary_id
@@ -225,6 +221,16 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
 
     const report = reportResult.rows[0];
 
+    // Authorization Check
+    if (
+      report.creator_id !== userId &&
+      report.project_creator_id !== userId &&
+      userRole !== 'Admin'
+    ) {
+      return res.status(403).send({ message: 'You are not authorized to view this report.' });
+    }
+
+    // 2. Get Dictionary
     let dictionary = null;
     if (report.dictionary_id) {
       const dictResult = await query(
@@ -235,18 +241,8 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
         dictionary = dictResult.rows[0].content;
       }
     }
-    const userRole = req.user?.role;
-    
-    // Authorization: User must be the report creator, project creator, or an admin
-    if (
-      report.creator_id !== userId &&
-      report.project_creator_id !== userId &&
-      userRole !== 'Admin'
-    ) {
-      return res.status(403).send({ message: 'You are not authorized to view this report.' });
-    }
 
-    // Get all associated evidence cards
+    // 3. Get Phase 1 Evidence
     const evidenceResult = await query(
       `SELECT id, competency, level, kb, quote, source, reasoning, created_at
        FROM evidence
@@ -255,7 +251,7 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       [reportId]
     );
 
-    // (RP-7.3) Get uploaded raw text files
+    // 4. Get Raw Files
     const filesResult = await query(
       `SELECT id, file_name, simulation_method_tag, file_content 
       FROM report_files 
@@ -263,11 +259,31 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       [reportId]
     );
 
-    // Send all data back to the frontend
+    // --- NEW: Determine Current Phase ---
+    // Check if Phase 2 data exists
+    const phase2Check = await query(
+      'SELECT 1 FROM competency_analysis WHERE report_id = $1 LIMIT 1', 
+      [reportId]
+    );
+    const hasPhase2 = (phase2Check.rowCount || 0) > 0;
+
+    // Check if Phase 3 data exists
+    const phase3Check = await query(
+      'SELECT 1 FROM executive_summary WHERE report_id = $1 LIMIT 1', 
+      [reportId]
+    );
+    const hasPhase3 = (phase3Check.rowCount || 0) > 0;
+
+    let currentPhase = 1;
+    if (hasPhase3) currentPhase = 3;
+    else if (hasPhase2) currentPhase = 2;
+
+    // Send Response
     res.status(200).json({
       title: report.title,
-      status: report.status, // e.g., 'PROCESSING', 'COMPLETED', 'FAILED'
+      status: report.status,
       projectId: report.project_id,
+      currentPhase: currentPhase, // <--- Sending this to frontend
       evidence: evidenceResult.rows,
       rawFiles: filesResult.rows,
       dictionary: dictionary
@@ -382,6 +398,119 @@ router.delete('/evidence/:evidenceId', authenticateToken, async (req: Authentica
   } catch (error) {
     console.error(`Error deleting evidence ${evidenceId}:`, error);
     res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * (New) Trigger Phase 1 Generation Manually
+ */
+router.post('/:id/generate/phase1', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  const userId = req.user?.userId;
+
+  try {
+    // 1. Update status to PROCESSING
+    await query("UPDATE reports SET status = 'PROCESSING' WHERE id = $1", [reportId]);
+
+    // 2. Add job to queue
+    await aiGenerationQueue.add('generate-phase-1', {
+      reportId,
+      userId
+    });
+
+    res.status(200).send({ message: "Phase 1 generation started." });
+  } catch (error) {
+    console.error("Failed to start Phase 1:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (RP-7.11) Trigger Phase 2 Generation
+ */
+router.post('/:id/generate/phase2', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  const userId = req.user?.userId;
+
+  try {
+    const check = await query(
+      'SELECT 1 FROM evidence WHERE report_id = $1 AND is_archived = false LIMIT 1',
+      [reportId]
+    );
+
+    if ((check.rowCount || 0) === 0) {
+      return res.status(400).send({ message: "Cannot generate analysis: No evidence collected yet." })
+    }
+
+    // Add job to queue
+    await aiGenerationQueue.add('generate-phase-2', {
+      reportId,
+      userId
+    });
+
+    res.status(200).send({ message: "Phase 2 generation started." });
+  } catch (error) {
+    console.error("Failed to start Phase 2:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+// While we are here, let's add the GET route to fetch this data later
+router.get('/:id/analysis', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  try {
+    const result = await query(
+      `SELECT * FROM competency_analysis WHERE report_id = $1 ORDER BY competency`,
+      [reportId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error fetching analysis:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (RP-7.14) Trigger Phase 3 Generation
+ */
+router.post('/:id/generate/phase3', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  const userId = req.user?.userId;
+
+  try {
+    // Validation: Ensure Phase 2 is done (optional but good practice)
+    const check = await query('SELECT 1 FROM competency_analysis WHERE report_id = $1 LIMIT 1', [reportId]);
+    if ((check.rowCount || 0) === 0) {
+        return res.status(400).send({ message: "Cannot generate summary: Competency analysis (Phase 2) is missing." });
+    }
+
+    await aiGenerationQueue.add('generate-phase-3', {
+      reportId,
+      userId
+    });
+
+    res.status(200).send({ message: "Phase 3 generation started." });
+  } catch (error) {
+    console.error("Failed to start Phase 3:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (RP-7.14) Get Executive Summary
+ */
+router.get('/:id/summary', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  try {
+    const result = await query(
+      `SELECT * FROM executive_summary WHERE report_id = $1`,
+      [reportId]
+    );
+    // Return the single object or null
+    res.json(result.rows[0] || null);
+  } catch (error) {
+    console.error("Error fetching summary:", error);
+    res.status(500).send({ message: "Internal server error" });
   }
 });
 
