@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import apiService from '../services/apiService';
+import { useUserStore } from '../state/userStore';
 import { useToastStore } from '../state/toastStore';
 import ProjectContextModal from '../components/ProjectContextModal';
 import CompetencyAnalysisList from '../components/report/CompetencyAnalysisList';
@@ -18,6 +19,7 @@ interface ReportData {
   title: string;
   status: 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   projectId: string;
+  creatorId: string;
   currentPhase: number;
   evidence: EvidenceCardData[];
   rawFiles: {
@@ -220,11 +222,21 @@ export default function ReportPage({
   setRefreshTrigger: (cb: (c: number) => number) => void
 }) {
   const { id: reportId } = useParams();
+
+  const currentUserId = useUserStore((state) => state.userId);
+
   const addToast = useToastStore((state) => state.addToast);
 
   // --- State ---
   const [isLoading, setIsLoading] = useState(true);
   const [reportData, setReportData] = useState<ReportData | null>(null);
+  const [askAiContext, setAskAiContext] = useState<{ 
+      context: string; 
+      currentText: string; 
+      onApply: (newText: string) => void; // <--- The magic callback
+  } | null>(null);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isRefining, setIsRefining] = useState(false);
   
   // Tabs & Phases
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>('evidence');
@@ -266,7 +278,8 @@ export default function ReportPage({
   const isInitialLoad = useRef(true);
 
   // --- Derived ---
-  const isViewOnly = false; // TODO: Implement RBAC
+  const isCreator = reportData?.creatorId === currentUserId;
+  const isViewOnly = !isCreator;
 
   const isEvidenceLocked = highestPhaseVisible !== 'evidence';
 
@@ -502,12 +515,72 @@ export default function ReportPage({
 };
 
 // Inside ReportPage component
-const handleAskAI = (context: string, currentText: string) => {
-    console.log("Ask AI Request:", context);
-    // In Sprint 4, this will open the 'modals.askAI' and pass the text.
-    // For now:
-    setModals(prev => ({ ...prev, askAI: true }));
+const handleAskAI = (context: string, currentText: string, onApply: (t: string) => void) => {
+  setAskAiContext({ context, currentText, onApply });
+  setAiPrompt(''); 
+  setModals(prev => ({ ...prev, askAI: true }));
 };
+
+const handleExportReport = async () => {
+  if (!reportId) return;
+  try {
+    addToast("Generating report document...", 'info');
+    // We use the native fetch or axios with blob response type
+    const response = await apiService.get(`/reports/${reportId}/export`, {
+      responseType: 'blob' // Important for binary files
+    });
+
+    // Create download link
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    // Try to get filename from header, or fallback
+    const contentDisposition = response.headers['content-disposition'];
+    let fileName = 'Report.docx';
+    if (contentDisposition) {
+        const match = contentDisposition.match(/filename=(.+)/);
+        if (match && match.length > 1) fileName = match[1];
+    }
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    addToast("Report downloaded successfully.", 'success');
+  } catch (error) {
+    console.error(error);
+    addToast("Failed to export report.", 'error');
+  }
+};
+
+const submitRefinement = async () => {
+  if (!reportId || !askAiContext) return;
+
+  setIsRefining(true);
+  try {
+    const response = await apiService.post(`/reports/${reportId}/refine`, {
+      prompt: aiPrompt,
+      currentText: askAiContext.currentText,
+      context: askAiContext.context
+    });
+
+    const { refinedText } = response.data;
+
+    askAiContext.onApply(refinedText); 
+    addToast("Text refined by AI.", 'success');
+
+    // Close modal
+    setModals(prev => ({ ...prev, askAI: false }));
+
+  } catch (error) {
+    console.error(error);
+    addToast("Failed to refine text.", 'error');
+  } finally {
+    setIsRefining(false);
+  }
+};
+
+const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [key]: false }));
   
   if (isLoading && !reportData) {
       return <div className="flex h-screen items-center justify-center text-text-muted">Loading Report...</div>;
@@ -564,6 +637,14 @@ const handleAskAI = (context: string, currentText: string) => {
                     </button>
                 )}
              </div>
+             <button
+               className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors flex items-center gap-2"
+               disabled={isViewOnly}
+               onClick={handleExportReport}
+             >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Export
+             </button>
              <button className="bg-primary text-white text-sm font-semibold px-4 py-2 rounded-md hover:bg-primary-hover">
                 Save Report
              </button>
@@ -663,6 +744,7 @@ const handleAskAI = (context: string, currentText: string) => {
                         isViewOnly={isViewOnly}
                         onGenerateNext={handleGeneratePhase3}
                         onHighlightEvidence={handleQuoteSelection}
+                        onAskAI={handleAskAI}
                     />
                 )}
 
@@ -730,6 +812,52 @@ const handleAskAI = (context: string, currentText: string) => {
                      </button>
                  </div>
              </div>
+        </div>
+      )}
+
+      {modals.askAI && (
+        <div className="fixed inset-0 z-30 pointer-events-none">
+          <div className="fixed inset-0 bg-black/20 pointer-events-auto" onClick={() => closeModal('askAI')}></div>
+          <div className="fixed top-0 right-0 h-full w-full max-w-lg bg-bg-light shadow-lg flex flex-col pointer-events-auto">
+            <div className="flex items-center justify-between p-6 border-b border-border">
+              <h3 className="text-xl font-semibold text-text-primary">Ask AI</h3>
+              <button className="text-text-muted hover:text-text-primary" onClick={() => closeModal('askAI')}>&times;</button>
+            </div>
+            <div className="flex-grow p-6 space-y-4 overflow-y-auto">
+              <div className="p-4 bg-bg-medium rounded-md border border-border">
+                <h4 className="text-sm font-semibold text-text-primary mb-1">Context</h4>
+                <p className="text-sm text-text-secondary">{askAiContext?.context}</p>
+              </div>
+
+              {/* Input */}
+              <div>
+                <label htmlFor="ai-prompt" className="text-sm font-medium text-text-primary mb-1 block">Your Request</label>
+                <textarea
+                  id="ai-prompt"
+                  rows={4}
+                  className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+                  placeholder="e.g., 'Make this more concise'"
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                ></textarea>
+              </div>
+            </div>
+            <div className="p-6 bg-bg-medium border-t border-border flex justify-end gap-3">
+              <button
+                className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium"
+                onClick={() => closeModal('askAI')}
+              >
+                Cancel
+              </button>
+              <button
+                className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover disabled:opacity-50"
+                onClick={submitRefinement}
+                disabled={isRefining || !aiPrompt}
+              >
+                {isRefining ? 'Thinking...' : 'Refine'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

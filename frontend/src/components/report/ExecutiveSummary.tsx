@@ -12,7 +12,7 @@ interface SummaryData {
 interface ExecutiveSummaryProps {
   reportId: string;
   isViewOnly: boolean;
-  onAskAI: (context: string, currentText: string) => void;
+  onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
 }
 
 export default function ExecutiveSummary({
@@ -76,7 +76,11 @@ export default function ExecutiveSummary({
           <label className="text-base font-semibold text-text-primary">Strengths</label>
           {!isViewOnly && (
             <button
-              onClick={() => onAskAI('Refine Strengths Section', data.strengths)}
+              onClick={() => onAskAI(
+                'Refine Strengths Section',
+                data.strengths,
+                (newText) => handleChange('strengths', newText)
+            )}
               className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
               title="Ask AI to refine"
             >
@@ -99,7 +103,11 @@ export default function ExecutiveSummary({
           <label className="text-base font-semibold text-text-primary">Areas for Improvement</label>
           {!isViewOnly && (
             <button
-              onClick={() => onAskAI('Refine Improvements Section', data.areas_for_improvement)}
+              onClick={() => onAskAI(
+                'Refine Improvements Section',
+                data.areas_for_improvement,
+                (newText) => handleChange('areas_for_improvement', newText)
+              )}
               className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
               title="Ask AI to refine"
             >
@@ -122,7 +130,11 @@ export default function ExecutiveSummary({
           <label className="text-base font-semibold text-text-primary">Development Recommendations</label>
           {!isViewOnly && (
             <button
-              onClick={() => onAskAI('Refine Recommendations Section', data.recommendations)}
+              onClick={() => onAskAI(
+                'Refine Recommendations Section',
+                data.recommendations,
+                (newText) => handleChange('recommendations', newText)
+              )}
               className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
               title="Ask AI to refine"
             >

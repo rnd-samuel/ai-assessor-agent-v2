@@ -29,7 +29,7 @@ interface CompetencyAnalysisCardProps {
   targetLevel: string;
   isViewOnly: boolean;
   onChange: (updated: CompetencyAnalysisData) => void;
-  onAskAI: (context: string, currentText: string) => void;
+  onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
   onHighlightEvidence: (quote: string, source: string) => void;
 }
 
@@ -110,7 +110,14 @@ export default function CompetencyAnalysisCard({
             <label className="text-sm font-medium text-text-primary">Assessment Explanation</label>
             {!isViewOnly && (
               <button
-                onClick={() => onAskAI(`Refine explanation for ${data.competencyName}`, explanation)}
+                onClick={() => onAskAI(
+                  `Refine explanation for ${data.competencyName}`,
+                  explanation,
+                  (newText) => {
+                    setExplanation(newText);
+                    handleUpdate({ explanation: newText });
+                  }
+                )}
                 className="p-1 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
@@ -159,7 +166,14 @@ export default function CompetencyAnalysisCard({
                         <label className="text-xs font-medium text-text-muted">Explanation</label>
                         {!isViewOnly && (
                           <button
-                            onClick={() => onAskAI(`Refine KB analysis for: ${kb.kbText}`, kb.explanation || '')}
+                            onClick={() => onAskAI(
+                              `Refine KB analysis for: ${kb.kbText}`,
+                              kb.explanation || '',
+                              (newText) => {
+                                setExplanation(newText);
+                                handleUpdate({ explanation: newText });
+                              }
+                            )}
                             className="p-1 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
@@ -211,7 +225,14 @@ export default function CompetencyAnalysisCard({
             <label className="text-sm font-medium text-text-primary">Development Recommendations</label>
             {!isViewOnly && (
               <button
-                onClick={() => onAskAI(`Refine development recommendations for ${data.competencyName}`, recommendation)}
+                onClick={() => onAskAI(
+                  `Refine development recommendations for ${data.competencyName}`,
+                  recommendation,
+                  (newText) => {
+                    setExplanation(newText);
+                    handleUpdate({ explanation: newText });
+                  }
+                )}
                 className="p-1 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>

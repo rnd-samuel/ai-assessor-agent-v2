@@ -4,6 +4,10 @@ import { authenticateToken } from '../middleware/auth.middleware';
 import { query } from '../services/db';
 import { aiGenerationQueue } from '../services/queue';
 import multer from 'multer';
+import PizZip from 'pizzip';
+import Docxtemplater from 'docxtemplater';
+import fs from 'fs';
+import path from 'path';
 
 // Configure multer to store files in memory as buffers
 const storage = multer.memoryStorage();
@@ -283,7 +287,8 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       title: report.title,
       status: report.status,
       projectId: report.project_id,
-      currentPhase: currentPhase, // <--- Sending this to frontend
+      currentPhase: currentPhase,
+      creatorId: report.creator_id,
       evidence: evidenceResult.rows,
       rawFiles: filesResult.rows,
       dictionary: dictionary
@@ -510,6 +515,92 @@ router.get('/:id/summary', authenticateToken, async (req: AuthenticatedRequest, 
     res.json(result.rows[0] || null);
   } catch (error) {
     console.error("Error fetching summary:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (RP-7.16) Export Report to DOCX
+ */
+router.get('/:id/export', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+
+  try {
+    // 1. Fetch all necessary data
+    const reportRes = await query('SELECT title FROM reports WHERE id = $1', [reportId]);
+    const summaryRes = await query('SELECT * FROM executive_summary WHERE report_id = $1', [reportId]);
+    // TODO: Fetch competency analysis too if you want to include that in the report
+    
+    if (reportRes.rows.length === 0) return res.status(404).send('Report not found');
+    
+    const report = reportRes.rows[0];
+    const summary = summaryRes.rows[0] || { strengths: '', areas_for_improvement: '', recommendations: '' };
+
+    // 2. Load Template
+    // In production, you would fetch the file path from the 'projects' table
+    const templatePath = path.resolve(__dirname, '../../template.docx');
+    
+    // Check if template exists (for testing)
+    if (!fs.existsSync(templatePath)) {
+        // Fallback if no template found during dev
+        return res.status(500).send("Server Error: 'template.docx' not found in backend root.");
+    }
+
+    const content = fs.readFileSync(templatePath, 'binary');
+    const zip = new PizZip(content);
+
+    // 3. Create Document instance
+    const doc = new Docxtemplater(zip, {
+      paragraphLoop: true,
+      linebreaks: true,
+    });
+
+    // 4. Render the document (Replace placeholders)
+    doc.render({
+      title: report.title,
+      strengths: summary.strengths,
+      areas_for_improvement: summary.areas_for_improvement,
+      recommendations: summary.recommendations,
+      // Add more fields here mapping to your Word template tags
+    });
+
+    // 5. Generate buffer
+    const buf = doc.getZip().generate({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+    });
+
+    // 6. Send file
+    const safeTitle = report.title.replace(/[^a-zA-Z0-9]/g, '_');
+    res.setHeader('Content-Disposition', `attachment; filename=${safeTitle}_Report.docx`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.send(buf);
+
+  } catch (error) {
+    console.error('Error exporting report:', error);
+    res.status(500).send({ message: 'Internal server error during export.' });
+  }
+});
+
+/**
+ * (RP-7.13) Ask AI / Refine Text
+ */
+router.post('/:id/refine', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { prompt, currentText, context } = req.body;
+
+  try {
+    // Mock AI Delay
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Mock Logic: Just append something to show it worked
+    const refinedText = `${currentText}\n\n[AI Refined based on: "${prompt}"]`;
+
+    res.json({
+      refinedText,
+      reasoning: "I have updated the text to address your request for clarity."
+    });
+  } catch (error) {
+    console.error("Ask AI failed:", error);
     res.status(500).send({ message: "Internal server error" });
   }
 });

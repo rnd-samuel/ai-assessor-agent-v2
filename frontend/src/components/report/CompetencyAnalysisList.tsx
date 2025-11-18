@@ -8,6 +8,7 @@ interface CompetencyAnalysisListProps {
   isViewOnly: boolean;
   onGenerateNext: () => void;
   onHighlightEvidence: (quote: string, source: string) => void;
+  onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
 }
 
 export default function CompetencyAnalysisList({
@@ -15,6 +16,7 @@ export default function CompetencyAnalysisList({
   isViewOnly,
   onGenerateNext,
   onHighlightEvidence,
+  onAskAI,
 }: CompetencyAnalysisListProps) {
   const [analysisData, setAnalysisData] = useState<CompetencyAnalysisData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -58,14 +60,6 @@ export default function CompetencyAnalysisList({
         prev.map((item) => (item.id === updatedItem.id ? updatedItem : item))
     );
     // TODO: Autosave to backend
-  };
-
-  const handleAskAI = (context: string, currentText: string) => {
-    // In a real app, this would open the "Ask AI" modal in the parent ReportPage.
-    // For now, we will just log it or alert.
-    // To fix this properly, we should lift the 'modals.askAI' state up or expose a context.
-    console.log("Ask AI triggered:", context);
-    alert("Ask AI feature coming soon! Context: " + context);
   };
 
   // Filter Logic
@@ -139,7 +133,7 @@ export default function CompetencyAnalysisList({
                     targetLevel="3" // TODO: Pass real target level from Report Context
                     isViewOnly={isViewOnly}
                     onChange={handleCardChange}
-                    onAskAI={handleAskAI}
+                    onAskAI={onAskAI}
                     onHighlightEvidence={onHighlightEvidence}
                  />
              ))
