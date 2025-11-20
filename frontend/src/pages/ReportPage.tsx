@@ -5,14 +5,15 @@ import apiService from '../services/apiService';
 import { useUserStore } from '../state/userStore';
 import { useToastStore } from '../state/toastStore';
 import ProjectContextModal from '../components/ProjectContextModal';
-import CompetencyAnalysisList from '../components/report/CompetencyAnalysisList';
+import { getSocket } from '../services/socket';
 
 // Component Imports
 import RawTextPanel from '../components/report/RawTextPanel';
 import EvidenceList from '../components/report/EvidenceList';
 import { type EvidenceCardData } from '../components/report/EvidenceCard';
-
-import ExecutiveSummary from '../components/report/ExecutiveSummary';
+import CompetencyAnalysisList from '../components/report/CompetencyAnalysisList'; // Child 1
+import ExecutiveSummary from '../components/report/ExecutiveSummary'; // Child 2
+import { type CompetencyAnalysisData } from '../components/report/CompetencyAnalysisCard'; // Import Type
 
 // --- Data Types ---
 interface ReportData {
@@ -21,6 +22,7 @@ interface ReportData {
   projectId: string;
   creatorId: string;
   currentPhase: number;
+  targetPhase: number;
   evidence: EvidenceCardData[];
   rawFiles: {
     id: string;
@@ -29,6 +31,9 @@ interface ReportData {
     file_content: string;
   }[];
   dictionary: any;
+  // These come from the API now, but we store them in separate state
+  competencyAnalysis?: CompetencyAnalysisData[]; 
+  executiveSummary?: any;
 }
 
 type AnalysisTab = 'evidence' | 'competency' | 'summary';
@@ -214,22 +219,20 @@ function CreateChangeModal({
 }
 
 // --- Main Report Page Component ---
-export default function ReportPage({ 
-  refreshTrigger, 
-  setRefreshTrigger 
-}: { 
-  refreshTrigger: number,
-  setRefreshTrigger: (cb: (c: number) => number) => void
-}) {
+export default function ReportPage() {
   const { id: reportId } = useParams();
-
   const currentUserId = useUserStore((state) => state.userId);
-
   const addToast = useToastStore((state) => state.addToast);
 
   // --- State ---
   const [isLoading, setIsLoading] = useState(true);
   const [reportData, setReportData] = useState<ReportData | null>(null);
+
+  // State for content
+  const [competencyData, setCompetencyData] = useState<any[]>([]);
+  const [summaryData, setSummaryData] = useState<any>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
   const [askAiContext, setAskAiContext] = useState<{ 
       context: string; 
       currentText: string; 
@@ -274,14 +277,13 @@ export default function ReportPage({
   const handleRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
-
   const isInitialLoad = useRef(true);
 
   // --- Derived ---
   const isCreator = reportData?.creatorId === currentUserId;
   const isViewOnly = !isCreator;
-
   const isEvidenceLocked = highestPhaseVisible !== 'evidence';
+  const isAnalysisLocked = highestPhaseVisible === 'summary';
 
   const activeFile = reportData?.rawFiles.find(f => f.id === activeFileId);
   
@@ -291,24 +293,62 @@ export default function ReportPage({
     try {
       setIsLoading(true);
       const response = await apiService.get<ReportData>(`/reports/${reportId}/data`);
+      
+      // 1. Handle Report Data
       setReportData(response.data);
       
-      // Set initial file tab if none selected
       if (!activeFileId && response.data.rawFiles.length > 0) {
         setActiveFileId(response.data.rawFiles[0].id);
       }
 
-      // --- NEW: Restore Progress ---
-      const phase = response.data.currentPhase;
-      
-      // 1. Reveal Tabs
-      if (phase >= 2) setHighestPhaseVisible('competency');
-      if (phase >= 3) setHighestPhaseVisible('summary');
+      // 2. MAP Competency Data (Fixes the Crash!)
+      // We must transform snake_case DB columns to camelCase Interface props
+      const rawAnalysis = response.data.competencyAnalysis || [];
+      const mappedAnalysis = rawAnalysis.map((row: any) => ({
+        id: row.id,
+        // If 'competency' exists (from DB), map it. Otherwise keep existing if already mapped.
+        competencyName: row.competency || row.competencyName, 
+        levelAchieved: row.level_achieved || row.levelAchieved,
+        explanation: row.explanation,
+        developmentRecommendations: row.development_recommendations || row.developmentRecommendations,
+        // IMPORTANT: Map key_behaviors_status to keyBehaviors
+        keyBehaviors: row.key_behaviors_status || row.keyBehaviors || [] 
+      }));
 
-      // 2. Auto-switch to the latest tab (Only on initial load)
+      setCompetencyData(mappedAnalysis);
+
+      // 3. Handle Summary Data
+      // Summary keys mostly match, but let's be safe with defaults
+      const rawSummary = response.data.executiveSummary || {};
+      setSummaryData({
+        id: rawSummary.id || '',
+        strengths: rawSummary.strengths || '',
+        areas_for_improvement: rawSummary.areas_for_improvement || '',
+        recommendations: rawSummary.recommendations || ''
+      });
+
+      // 4. Restore Progress
+      const phase = response.data.currentPhase;
+      const target = response.data.targetPhase;
+      
+      // We use a functional update to ensure we check against the *current* state, not the closure's stale version
+      setHighestPhaseVisible((prev) => {
+        const phaseMap: Record<string, number> = { 'evidence': 1, 'competency': 2, 'summary': 3 };
+        const currentLevel = phaseMap[prev] || 1;
+        
+        let newLevel = currentLevel;
+        if (phase >= 2) newLevel = Math.max(newLevel, 2);
+        if (phase >= 3) newLevel = Math.max(newLevel, 3);
+        
+        // Map back to string
+        if (newLevel === 3) return 'summary';
+        if (newLevel === 2) return 'competency';
+        return 'evidence';
+      });
+
       if (isInitialLoad.current) {
-         if (phase === 2) setAnalysisTab('competency');
-         if (phase === 3) setAnalysisTab('summary');
+         if (phase === 2 && target >= 2) setAnalysisTab('competency');
+         if (phase === 3 && target >= 3) setAnalysisTab('summary');
          isInitialLoad.current = false;
       }
 
@@ -322,7 +362,95 @@ export default function ReportPage({
 
   useEffect(() => {
     fetchReportData();
-  }, [reportId, refreshTrigger]);
+  }, [fetchReportData]);
+
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket || !reportId) return;
+
+    const onLocalComplete = async (data: { reportId: string, message: string }) => {
+        if (data.reportId === reportId) {
+            console.log('ReportPage: Generation complete. Fetching new data...');
+            
+            // 1. Fetch Data
+            // We await this so the UI updates with the new content FIRST.
+            await fetchReportData();
+            
+            // 2. Show Toast immediately after fetch resolves
+            // This ensures "Content Loaded" -> "Toast Appears" sequence is tight.
+            addToast(data.message, 'success');
+        }
+    };
+
+    const onLocalFailed = async (data: { reportId: string, message: string }) => {
+        if (data.reportId === reportId) {
+             await fetchReportData(); 
+             addToast(data.message, 'error');
+        }
+    };
+
+    socket.on('generation-complete', onLocalComplete);
+    socket.on('generation-failed', onLocalFailed);
+
+    return () => {
+        socket.off('generation-complete', onLocalComplete);
+        socket.off('generation-failed', onLocalFailed);
+    };
+  }, [reportId, fetchReportData, addToast]);
+
+  const handleSaveReport = async () => {
+    if (!reportId) return;
+    setIsSaving(true);
+    try {
+      await apiService.put(`/reports/${reportId}/content`, {
+        competencyAnalysis: competencyData,
+        executiveSummary: summaryData
+      });
+      addToast("Report saved successfully.", 'success');
+    } catch (e) {
+      console.error(e);
+      addToast("Failed to save report.", 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleExportReport = async () => {
+    if (!reportId) return;
+    
+    // Save first to ensure export is up to date? Optional, but good UX.
+    // await handleSaveReport(); 
+
+    try {
+      addToast("Generating report document...", 'info');
+      const response = await apiService.get(`/reports/${reportId}/export`, {
+        responseType: 'blob' 
+      });
+
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Try to get filename from header
+      const contentDisposition = response.headers['content-disposition'];
+      let fileName = 'Report.docx';
+      if (contentDisposition) {
+          const match = contentDisposition.match(/filename="?([^"]+)"?/);
+          if (match && match.length > 1) fileName = match[1];
+      }
+      
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      addToast("Report downloaded successfully.", 'success');
+    } catch (error) {
+      console.error(error);
+      addToast("Failed to export report.", 'error');
+    }
+  };
 
   // --- 1. Resizing Handler (The React Way) ---
   const startResizing = useCallback((e: React.MouseEvent) => {
@@ -450,7 +578,9 @@ export default function ReportPage({
         addToast("Evidence deleted.", 'success');
         setEvidenceToDelete(null);
         setModals(prev => ({ ...prev, deleteEvidence: false }));
-        setRefreshTrigger(c => c + 1);
+        
+        await fetchReportData(); 
+        
     } catch (error) {
         console.error(error);
         addToast("Failed to delete evidence.", 'error');
@@ -460,13 +590,16 @@ export default function ReportPage({
   const handleGeneratePhase1 = async () => {
     if (!reportId) return;
     try {
+      // 1. Optimistic Update (FIX: Prevents button flash)
+      setReportData(prev => prev ? { ...prev, status: 'PROCESSING' } : null);
+
       await apiService.post(`/reports/${reportId}/generate/phase1`);
       addToast("AI evidence generation started...", 'info');
-      // Optimistically update status so UI reflects change immediately
-      setReportData(prev => prev ? { ...prev, status: 'PROCESSING' } : null);
     } catch (error) {
       console.error(error);
       addToast("Failed to start AI generation.", 'error');
+      // Revert on failure
+      fetchReportData();
     }
   };
 
@@ -500,10 +633,12 @@ export default function ReportPage({
   const handleGeneratePhase3 = async () => {
   if (!reportId) return;
   try {
-    await apiService.post(`/reports/${reportId}/generate/phase3`);
-    addToast("Phase 3 (Executive Summary) generation started...", 'info');
     setHighestPhaseVisible('summary');
     setAnalysisTab('summary');
+
+    await apiService.post(`/reports/${reportId}/generate/phase3`);
+    addToast("Phase 3 (Executive Summary) generation started...", 'info');
+
   } catch (error: any) {
     console.error(error);
     if (error.response && error.response.status === 400) {
@@ -519,38 +654,6 @@ const handleAskAI = (context: string, currentText: string, onApply: (t: string) 
   setAskAiContext({ context, currentText, onApply });
   setAiPrompt(''); 
   setModals(prev => ({ ...prev, askAI: true }));
-};
-
-const handleExportReport = async () => {
-  if (!reportId) return;
-  try {
-    addToast("Generating report document...", 'info');
-    // We use the native fetch or axios with blob response type
-    const response = await apiService.get(`/reports/${reportId}/export`, {
-      responseType: 'blob' // Important for binary files
-    });
-
-    // Create download link
-    const url = window.URL.createObjectURL(new Blob([response.data]));
-    const link = document.createElement('a');
-    link.href = url;
-    // Try to get filename from header, or fallback
-    const contentDisposition = response.headers['content-disposition'];
-    let fileName = 'Report.docx';
-    if (contentDisposition) {
-        const match = contentDisposition.match(/filename=(.+)/);
-        if (match && match.length > 1) fileName = match[1];
-    }
-    link.setAttribute('download', fileName);
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-
-    addToast("Report downloaded successfully.", 'success');
-  } catch (error) {
-    console.error(error);
-    addToast("Failed to export report.", 'error');
-  }
 };
 
 const submitRefinement = async () => {
@@ -619,7 +722,7 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
                     1. Evidence
                 </button>
                 
-                {(highestPhaseVisible === 'competency' || highestPhaseVisible === 'summary') && (
+                {reportData && reportData.targetPhase >= 2 && (highestPhaseVisible === 'competency' || highestPhaseVisible === 'summary') && (
                     <button 
                         onClick={() => setAnalysisTab('competency')}
                         className={`px-3 py-1 text-xs font-semibold rounded-md transition-all ${analysisTab === 'competency' ? 'bg-white text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}
@@ -628,7 +731,7 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
                     </button>
                 )}
                 
-                {highestPhaseVisible === 'summary' && (
+                {reportData && reportData.targetPhase >= 3 && highestPhaseVisible === 'summary' && (
                     <button 
                         onClick={() => setAnalysisTab('summary')}
                         className={`px-3 py-1 text-xs font-semibold rounded-md transition-all ${analysisTab === 'summary' ? 'bg-white text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}
@@ -638,15 +741,19 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
                 )}
              </div>
              <button
-               className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors flex items-center gap-2"
-               disabled={isViewOnly}
+               className={`bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors flex items-center gap-2 ${reportData?.currentPhase !== 3 ? 'opacity-50 cursor-not-allowed' : ''}`}
+               disabled={!reportData || reportData.currentPhase < reportData.targetPhase}
                onClick={handleExportReport}
              >
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Export
              </button>
-             <button className="bg-primary text-white text-sm font-semibold px-4 py-2 rounded-md hover:bg-primary-hover">
-                Save Report
+             <button 
+               onClick={handleSaveReport}
+               disabled={isSaving || isViewOnly}
+               className="bg-primary text-white text-sm font-semibold px-4 py-2 rounded-md hover:bg-primary-hover"
+              >
+                {isSaving ? 'Saving...' : 'Save Report'}
              </button>
         </div>
       </header>
@@ -741,10 +848,19 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
                 {analysisTab === 'competency' && (
                     <CompetencyAnalysisList
                         reportId={reportId || ''}
-                        isViewOnly={isViewOnly}
-                        onGenerateNext={handleGeneratePhase3}
+                        isViewOnly={isViewOnly || isAnalysisLocked}
+                        onGenerateNext={() => {
+                          if (reportData?.targetPhase === 2) {
+                            alert("Analysis is the final phase for this project.");
+                            return Promise.resolve();
+                          } else {
+                            return handleGeneratePhase3();
+                          }
+                        }}
                         onHighlightEvidence={handleQuoteSelection}
                         onAskAI={handleAskAI}
+                        data={competencyData}
+                        onChange={setCompetencyData}
                     />
                 )}
 
@@ -753,6 +869,8 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
                         reportId={reportId || ''}
                         isViewOnly={isViewOnly}
                         onAskAI={handleAskAI}
+                        data={summaryData}
+                        onChange={setSummaryData}
                     />
                 )}
             </div>
@@ -764,7 +882,7 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
       <CreateChangeModal 
         isOpen={modals.createEvidence || modals.changeEvidence}
         onClose={() => setModals(prev => ({ ...prev, createEvidence: false, changeEvidence: false }))}
-        onSave={() => setRefreshTrigger(c => c + 1)}
+        onSave={() => fetchReportData()}
         reportId={reportId || ''}
         evidenceToEdit={evidenceToEdit}
         selectedEvidenceText={selectedText}

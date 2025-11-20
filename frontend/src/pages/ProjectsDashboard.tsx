@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useUserStore } from '../state/userStore';
 import apiService from '../services/apiService';
 import { useToastStore } from '../state/toastStore';
+import LoadingButton from '../components/LoadingButton';
 
 // Define the shape of a Project (matches our new API response)
 interface Project {
@@ -30,6 +31,7 @@ export default function ProjectsDashboard() {
   const [showingArchived, setShowingArchived] = useState(false); //P4
   const [modals, setModals] = useState({ archive: false, unarchive: false });
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set()); //P3
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // State for sorting
   // Default sort: by date, descending (newest first)
@@ -93,6 +95,7 @@ export default function ProjectsDashboard() {
       return;
     }
 
+    setIsProcessing(true);
     try {
       for (const id of idsToArchive) {
         await apiService.put(`/projects/${id}/archive`);
@@ -112,6 +115,8 @@ export default function ProjectsDashboard() {
       console.error("Failed to archive project(s):", error);
       const message = error.response?.data?.message || "Could not archive project(s).";
       addToast(`Error: ${message}`, 'error');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -129,6 +134,7 @@ export default function ProjectsDashboard() {
       return;
     }
 
+    setIsProcessing(true);
     try {
       for (const id of idsToUnarchive) {
         await apiService.put(`/projects/${id}/unarchive`);
@@ -147,6 +153,8 @@ export default function ProjectsDashboard() {
       console.error("Failed to unarchive project(s):", error);
       const message = error.response?.data?.message || "Could not unarchive project(s).";
       addToast(`Error: ${message}`, 'error');
+    } finally {
+      setIsProcessing(false);
     }
   };  
   
@@ -501,12 +509,21 @@ export default function ProjectsDashboard() {
               Are you sure you want to archive the selected project(s)? You can restore them later.
             </p>
             <div className="flex justify-end gap-3 mt-6">
-              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('archive')}>
+              <button 
+                className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" 
+                onClick={() => closeModal('archive')}
+                disabled={isProcessing}
+              >
                 Cancel
               </button>
-              <button className="bg-error text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-red-700" onClick={handleArchive}>
+              <LoadingButton
+                variant="danger"
+                onClick={handleArchive}
+                isLoading={isProcessing}
+                loadingText="Archiving..."
+              >
                 Archive
-              </button>
+              </LoadingButton>
             </div>
           </div>
         </div>
@@ -524,12 +541,21 @@ export default function ProjectsDashboard() {
               This action will restore the selected project(s) to the active list.
             </p>
             <div className="flex justify-end gap-3 mt-6">
-              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('unarchive')}>
+              <button 
+                className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" 
+                onClick={() => closeModal('unarchive')}
+                disabled={isProcessing}
+              >
                 Cancel
               </button>
-              <button className="bg-info text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-blue-700" onClick={handleUnarchive}>
+              <LoadingButton
+                variant="info"
+                onClick={handleUnarchive}
+                isLoading={isProcessing}
+                loadingText="Restoring..."
+              >
                 Unarchive
-              </button>
+              </LoadingButton>
             </div>
           </div>
         </div>

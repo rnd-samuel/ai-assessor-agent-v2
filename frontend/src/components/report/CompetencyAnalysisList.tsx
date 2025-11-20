@@ -1,7 +1,7 @@
 // frontend/src/components/report/CompetencyAnalysisList.tsx
-import { useState, useEffect } from 'react';
-import apiService from '../../services/apiService';
+import { useState } from 'react';
 import CompetencyAnalysisCard, { type CompetencyAnalysisData } from './CompetencyAnalysisCard';
+import LoadingButton from '.././LoadingButton';
 
 interface CompetencyAnalysisListProps {
   reportId: string;
@@ -9,67 +9,44 @@ interface CompetencyAnalysisListProps {
   onGenerateNext: () => void;
   onHighlightEvidence: (quote: string, source: string) => void;
   onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
+  data: CompetencyAnalysisData[];
+  onChange: (newData: CompetencyAnalysisData[]) => void;
 }
 
 export default function CompetencyAnalysisList({
-  reportId,
   isViewOnly,
   onGenerateNext,
   onHighlightEvidence,
   onAskAI,
+  data,
+  onChange,
 }: CompetencyAnalysisListProps) {
-  const [analysisData, setAnalysisData] = useState<CompetencyAnalysisData[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   
   // Filters
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [filterCompetency, setFilterCompetency] = useState('');
 
-  // Fetch Data
-  useEffect(() => {
-    const fetchData = async () => {
-      if (!reportId) return;
-      try {
-        setIsLoading(true);
-        const response = await apiService.get(`/reports/${reportId}/analysis`);
-        
-        const mappedData = response.data.map((row: any) => ({
-            id: row.id,
-            competencyName: row.competency,
-            levelAchieved: row.level_achieved,
-            explanation: row.explanation,
-            developmentRecommendations: row.development_recommendations,
-            keyBehaviors: row.key_behaviors_status || []
-        }));
+  const [isGenerating, setIsGenerating] = useState(false);
 
-        setAnalysisData(mappedData);
-      } catch (err) {
-        console.error("Failed to fetch analysis:", err);
-        setError("Failed to load competency analysis.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [reportId]);
+  const handleGenerateSummary = async () => {
+    setIsGenerating(true);
+    await onGenerateNext();
+    setIsGenerating(false);
+  };
 
   const handleCardChange = (updatedItem: CompetencyAnalysisData) => {
-    setAnalysisData((prev) => 
-        prev.map((item) => (item.id === updatedItem.id ? updatedItem : item))
+    const newData = data.map((item) =>
+        item.id === updatedItem.id ? updatedItem : item
     );
     // TODO: Autosave to backend
+    onChange(newData);
   };
 
   // Filter Logic
-  const filteredData = analysisData.filter(item => 
+  const filteredData = data.filter(item =>
     filterCompetency === '' || item.competencyName === filterCompetency
   );
-  const competencies = [...new Set(analysisData.map(d => d.competencyName))];
-
-  if (isLoading) return <div className="p-10 text-center text-text-muted">Loading analysis...</div>;
-  if (error) return <div className="p-10 text-center text-error">{error}</div>;
+  const competencies = [...new Set(data.map(d => d.competencyName))];
 
   return (
     <div className="flex flex-col h-full" onClick={() => setIsFilterOpen(false)}>
@@ -117,13 +94,19 @@ export default function CompetencyAnalysisList({
       {/* Scrollable Content */}
       <div className="flex-grow overflow-y-auto p-6 space-y-6 bg-bg-medium/50">
          {filteredData.length === 0 ? (
-             <div className="text-center p-12 border-2 border-dashed border-border rounded-lg">
-                 <h3 className="text-lg font-semibold text-text-primary">Analysis Not Generated</h3>
-                 <p className="text-text-muted mt-1">
-                     {analysisData.length === 0 
-                        ? 'Please go back to the Evidence tab and click "Generate Next Phase".' 
-                        : 'No competencies match your filter.'}
-                 </p>
+             <div className="flex flex-col items-center justify-center h-64 text-center text-text-muted border-2 border-dashed border-border rounded-lg">
+                {data.length === 0 ? (
+                  <div className="space-y-3">
+                    <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto"></div>
+                    <p className="text-text-primary font-medium">Generating Analysis...</p>
+                    <p className="text-xs text-text-muted">This may take a moment.</p>
+                  </div>
+                ) : (
+                  <>
+                    <h3 className="text-lg font-semibold text-text-primary">No Competencies Found</h3>
+                    <p className="text-text-muted mt-1">No competencies match your filter.</p>
+                  </>
+                )}
              </div>
          ) : (
              filteredData.map((item) => (
@@ -142,13 +125,15 @@ export default function CompetencyAnalysisList({
 
       {/* Footer Actions */}
       <div className="p-4 border-t border-border bg-bg-light flex justify-end">
-         {!isViewOnly && analysisData.length > 0 && (
-             <button
-                onClick={onGenerateNext}
-                className="bg-primary text-white px-5 py-2.5 rounded-md text-sm font-semibold hover:bg-primary-hover shadow-sm transition-all flex items-center gap-2"
+         {!isViewOnly && data.length > 0 && (
+             <LoadingButton
+                onClick={handleGenerateSummary}
+                isLoading={isGenerating}
+                loadingText="Generating..."
+                className="flex items-center gap-2"
              >
                 Generate Final Summary &rarr;
-             </button>
+             </LoadingButton>
          )}
       </div>
     </div>

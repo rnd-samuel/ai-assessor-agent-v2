@@ -1,6 +1,7 @@
 // frontend/src/components/report/EvidenceList.tsx
 import { useState, useMemo } from 'react';
 import EvidenceCard, { type EvidenceCardData } from './EvidenceCard';
+import LoadingButton from '../LoadingButton';
 import * as XLSX from 'xlsx';
 
 // Data Format Helper
@@ -56,6 +57,8 @@ export default function EvidenceList({
   });
 
   const [isSkipModalOpen, setIsSkipModalOpen] = useState(false);
+  const [isGenEvidenceLoading, setIsGenEvidenceLoading] = useState(false);
+  const [isNextPhaseLoading, setIsNextPhaseLoading] = useState(false);
 
   // --- Derived Data ---
   const competencyMap = useMemo(() => {
@@ -129,9 +132,21 @@ export default function EvidenceList({
       if (reportStatus === 'CREATED') {
           setIsSkipModalOpen(true);
       } else {
-          onGenerateNext();
+          handleNextPhase();
       }
   };
+
+  const handleGenerateEvidence = async() => {
+    setIsGenEvidenceLoading(true);
+    await onGeneratePhase1();
+    setIsGenEvidenceLoading(false);
+  }
+
+  const handleNextPhase = async () => {
+    setIsNextPhaseLoading(true);
+    await onGenerateNext();
+    setIsNextPhaseLoading(false);
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -208,14 +223,16 @@ export default function EvidenceList({
              </div>
 
              {reportStatus === 'CREATED' && (
-                <button
-                  onClick={onGeneratePhase1}
+                <LoadingButton
+                  onClick={handleGenerateEvidence}
+                  isLoading={isGenEvidenceLoading}
+                  loadingText="Generating..."
                   disabled={isViewOnly}
-                  className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-sm font-medium px-3 py-1.5 rounded-md hover:from-indigo-600 hover:to-purple-700 flex items-center gap-2 shadow-sm transition-all"
+                  className="bg-gradient-to-r from-indigo-500 to-purple-600 border-none hover:from-indigo-600 hover:to-purple-700 text-white shadow-sm"
+                  icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/><path d="m12 8-2.5 3 1.5 4.5"/><path d="m17.5 8-2.5 3 1.5 4.5"/><path d="m7 8-2.5 3 1.5 4.5"/></svg>}
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/><path d="m12 8-2.5 3 1.5 4.5"/><path d="m17.5 8-2.5 3 1.5 4.5"/><path d="m7 8-2.5 3 1.5 4.5"/></svg>
                   Generate Evidence
-                </button>
+                </LoadingButton>
              )}
 
              {/* --- UPDATED BUTTON LOGIC --- */}
@@ -246,12 +263,16 @@ export default function EvidenceList({
                     <p className="text-sm">
                       You can manually highlight text on the left to create evidence, or let the AI find it for you.
                     </p>
-                    <button
-                      onClick={onGeneratePhase1}
-                      className="bg-primary text-white px-4 py-2 rounded-md text-sm font-semibold hover:bg-primary-hover shadow-md"
+                    <LoadingButton
+                      onClick={handleGenerateEvidence}
+                      isLoading={isGenEvidenceLoading}
+                      loadingText="Generating..."
+                      disabled={isViewOnly}
+                      className="bg-gradient-to-r from-indigo-500 to-purple-600 border-none hover:from-indigo-600 hover:to-purple-700 text-white shadow-sm mx-auto"
+                      icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/><path d="m12 8-2.5 3 1.5 4.5"/><path d="m17.5 8-2.5 3 1.5 4.5"/><path d="m7 8-2.5 3 1.5 4.5"/></svg>}
                     >
                       Start AI Generation
-                    </button>
+                    </LoadingButton>
                   </div>
                 ) : reportStatus === 'PROCESSING' ? (
                   <div>
@@ -289,13 +310,14 @@ export default function EvidenceList({
          </button>
 
          {!isViewOnly && (
-             <button
+             <LoadingButton
                 onClick={handleNextClick}
+                isLoading={isNextPhaseLoading}
+                loadingText="Processing..."
                 disabled={evidence.length === 0}
-                className="bg-primary text-white px-4 py-2 rounded-md text-sm font-semibold hover:bg-primary-hover shadow-sm transition-all"
              >
                 Generate Next Phase &rarr;
-             </button>
+             </LoadingButton>
          )}
       </div>
 
@@ -315,15 +337,18 @@ export default function EvidenceList({
               >
                 Cancel
               </button>
-              <button
-                className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover"
+              <LoadingButton
                 onClick={() => {
-                  setIsSkipModalOpen(false);
+                  setIsNextPhaseLoading(true);
                   onGenerateNext();
+                  setIsSkipModalOpen(false);
+                  setIsNextPhaseLoading(false);
                 }}
+                isLoading={isNextPhaseLoading}
+                loadingText="Proceeding..."
               >
                 Proceed Anyway
-              </button>
+              </LoadingButton>
             </div>
           </div>
         </div>

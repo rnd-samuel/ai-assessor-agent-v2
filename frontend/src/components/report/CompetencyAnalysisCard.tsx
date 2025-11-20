@@ -1,5 +1,5 @@
 // frontend/src/components/report/CompetencyAnalysisCard.tsx
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useLayoutEffect } from 'react';
 
 // 1. Updated Interfaces to match backend
 export interface EvidenceRef {
@@ -32,6 +32,18 @@ interface CompetencyAnalysisCardProps {
   onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
   onHighlightEvidence: (quote: string, source: string) => void;
 }
+
+const AutoTextarea = (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    if (textareaRef.current) {
+      // Reset height to auto to shrink if needed, then set to scrollHeight
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [props.value]);
+  return <textarea ref={textareaRef} {...props} />;
+};
 
 export default function CompetencyAnalysisCard({
   data,
@@ -124,7 +136,7 @@ export default function CompetencyAnalysisCard({
               </button>
             )}
           </div>
-          <textarea
+          <AutoTextarea
             rows={3}
             className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm text-text-secondary resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
             value={explanation}
@@ -180,7 +192,7 @@ export default function CompetencyAnalysisCard({
                           </button>
                         )}
                       </div>
-                      <textarea
+                      <AutoTextarea
                         rows={2}
                         className="w-full rounded-md border border-border p-2 bg-bg-medium/50 shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
                         value={kb.explanation || ''}
@@ -239,7 +251,7 @@ export default function CompetencyAnalysisCard({
               </button>
             )}
           </div>
-          <textarea
+          <AutoTextarea
             rows={3}
             className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm text-text-secondary resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
             value={recommendation}

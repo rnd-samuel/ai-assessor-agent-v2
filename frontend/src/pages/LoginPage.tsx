@@ -1,7 +1,8 @@
 // frontend/src/pages/LoginPage.tsx
 import React, { useState } from 'react';
-import apiService from '../services/apiService'; // <-- We will use this
-import { useUserStore } from '../state/userStore'; // <-- And this
+import apiService from '../services/apiService';
+import { useUserStore } from '../state/userStore';
+import LoadingButton from '../components/LoadingButton';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -9,13 +10,16 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [view, setView] = useState<'login' | 'forgot' | 'success'>('login');
 
+  const [isLoading, setIsLoading] = useState(false);
+
   // Get the 'setUser' action from our zustand store
   const setUser = useUserStore((state) => state.setUser);
 
-  // --- (FIXED) Handle Real Login ---
+  // --- Handle Real Login ---
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault(); 
-    setError(''); 
+    setError('');
+    setIsLoading(true);
 
     try {
       // 1. Call our REAL backend API endpoint (FR-AUTH-001)
@@ -45,6 +49,8 @@ export default function LoginPage() {
         setError('An unknown error occurred. Please try again.');
       }
       console.error(err);
+
+      setIsLoading(false);
     }
   };
 
@@ -118,12 +124,14 @@ export default function LoginPage() {
         )}
 
         <div className="pt-2">
-          <button 
+          <LoadingButton
             type="submit" 
-            className="w-full bg-primary text-white rounded-md text-sm font-semibold px-4 py-2.5 hover:bg-primary-hover active:bg-primary-active transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50"
+            className="w-full py-2.5"
+            isLoading={isLoading}
+            loadingText="Logging In..."
           >
             Log In
-          </button>
+          </LoadingButton>
         </div>
       </form>
     </div>
@@ -150,12 +158,14 @@ export default function LoginPage() {
         </div>
 
         <div className="pt-2">
-          <button 
+          <LoadingButton
             type="submit" 
-            className="w-full bg-primary text-white rounded-md text-sm font-semibold px-4 py-2.5 hover:bg-primary-hover active:bg-primary-active transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50"
+            className="w-full py-2.5"
+            isLoading={isLoading}
+            loadingText="Logging In..."
           >
             Send Reset Link
-          </button>
+          </LoadingButton>
         </div>
       </form>
 

@@ -3,11 +3,10 @@ import { Router, Request } from 'express';
 import { authenticateToken } from '../middleware/auth.middleware';
 import { query } from '../services/db';
 import { aiGenerationQueue } from '../services/queue';
+import { uploadToGCS } from '../services/storage';
+import { generateReportDocx } from '../services/document-service';
 import multer from 'multer';
-import PizZip from 'pizzip';
-import Docxtemplater from 'docxtemplater';
-import fs from 'fs';
-import path from 'path';
+import crypto from 'crypto';
 
 // Configure multer to store files in memory as buffers
 const storage = multer.memoryStorage();
@@ -22,6 +21,11 @@ interface AuthenticatedRequest extends Request {
 
 const router = Router();
 
+// Helper
+const calculateHash = (buffer: Buffer): string => {
+  return crypto.createHash('md5').update(buffer).digest('hex');
+};
+
 /**
  * (FR-AI-001) Create a new Report
  * This endpoint creates the report record in the database.
@@ -31,12 +35,21 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const { title, projectId, targetLevels, specificContext } = req.body;
   const creatorId = req.user?.userId;
 
-  if (!title || !projectId || !targetLevels) {
-    return res.status(400).send({ message: "Missing required fields: title, projectId, targetLevels" });
-  }
+  if (!title || !projectId) return res.status(400).send({ message: "Missing fields." });
 
   try {
-    // (U22, U25, U26) Save all the data from the New Report Page
+    // VALIDATION: Unique Title in Project
+    const dupCheck = await query(
+      `SELECT id FROM reports 
+       WHERE lower(title) = lower($1) 
+         AND project_id = $2 
+         AND is_archived = false`,
+      [title, projectId]
+    );
+    if (dupCheck.rows.length > 0) {
+      return res.status(409).send({ message: "An active report with this title already exists in this project." });
+    }
+
     const result = await query(
         `INSERT INTO reports (title, project_id, creator_id, target_levels, specific_context, status)
         VALUES ($1, $2, $3, $4, $5, 'CREATED')
@@ -44,14 +57,15 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
         [title, projectId, creatorId, JSON.stringify(targetLevels), specificContext]
     );
 
-    const newReportId = result.rows[0].id;
-
     res.status(201).json({
-      message: "Report record created. Waiting for manual trigger.",
-      reportId: newReportId
+      message: "Report record created.",
+      reportId: result.rows[0].id
     });
 
-  } catch (error) {
+  } catch (error: any) {
+    if (error.code === '23505') {
+        return res.status(409).send({ message: "Report title must be unique in this project." });
+    }
     console.error("Error creating report:", error);
     res.status(500).send({ message: "Internal server error" });
   }
@@ -66,37 +80,38 @@ router.post('/:id/upload', authenticateToken, upload.single('file'), async (req:
   const { simulationMethod } = req.body;
   const file = req.file;
 
-  if (!file) {
-    return res.status(400).send({ message: 'No file uploaded.' });
-  }
-  if (!simulationMethod) {
-    return res.status(400).send({ message: 'Missing simulationMethod tag.' });
-  }
+  if (!file || !simulationMethod) return res.status(400).send({ message: 'File or method missing.' });
 
   try {
-    // TODO: In the future, upload file.buffer to GCS
-    const gcsPath = `mock/gcs/path/for/${file.originalname}`;
+    // 1. Hash Check
+    const fileHash = calculateHash(file.buffer);
+    const dupCheck = await query(
+      "SELECT id FROM report_files WHERE report_id = $1 AND file_hash = $2",
+      [reportId, fileHash]
+    );
+    if (dupCheck.rows.length > 0) {
+      return res.status(409).send({ message: "This exact file has already been uploaded to this report." });
+    }
 
-    // Read file content as text (FOR MOCKING ONLY)
-    // TODO: REFACTOR - Implement real PDF/DOCX text extraction.
-    // Currently stripping null bytes to avoid Postgres "invalid byte sequence" error.
+    // 2. GCS Upload
+    const gcsPath = await uploadToGCS(file.buffer, file.originalname, `reports/${reportId}/evidence`);
+
+    // 3. Save DB
+    // NOTE: We still save 'file_content' as text for now because the AI service (Phase 1) currently reads it from DB.
+    // In a future sprint (RAG), we will remove 'file_content' and read from GCS/Vector DB.
     const fileContent = file.buffer.toString('utf-8').replace(/\0/g, '');
 
-    // (RP-7.3) Save file metadata to the database
     await query(
-      `INSERT INTO report_files (report_id, file_name, gcs_path, simulation_method_tag, file_content)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [reportId, file.originalname, gcsPath, simulationMethod, fileContent]
+      `INSERT INTO report_files (report_id, file_name, gcs_path, simulation_method_tag, file_content, file_hash)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [reportId, file.originalname, gcsPath, simulationMethod, fileContent, fileHash]
     );
 
-    res.status(200).send({
-      message: 'File uploaded and associated with report.',
-      filename: file.originalname,
-    });
+    res.status(200).send({ message: 'File uploaded.', filename: file.originalname });
 
   } catch (error) {
-    console.error('Report file upload failed', error);
-    res.status(500).send({ message: 'Internal server error during file upload.' });
+    console.error('Report upload failed', error);
+    res.status(500).send({ message: 'Internal server error.' });
   }
 });
 
@@ -194,10 +209,7 @@ router.put('/:id/unarchive', authenticateToken, async (req: AuthenticatedRequest
   }
 });
 
-/**
- * (RP-7.1, RP-7.4) Get all data for a single report page
- * Updated to include phase progress detection
- */
+// (RP-7.1, RP-7.4, RP-7.12, RP-7.14) Get ALL data for a report
 router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const { id: reportId } = req.params;
   const userId = req.user?.userId;
@@ -207,12 +219,9 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
     // 1. Get Report Details
     const reportResult = await query(
       `SELECT 
-         r.title, 
-         r.status, 
-         r.creator_id, 
-         r.project_id,
-         p.creator_id as project_creator_id,
-         p.dictionary_id
+         r.title, r.status, r.creator_id, r.project_id, r.target_levels,
+         p.creator_id as project_creator_id, p.dictionary_id,
+         p.enable_analysis, p.enable_summary
        FROM reports r
        JOIN projects p ON r.project_id = p.id
        WHERE r.id = $1`,
@@ -225,77 +234,65 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
 
     const report = reportResult.rows[0];
 
-    // Authorization Check
-    if (
-      report.creator_id !== userId &&
-      report.project_creator_id !== userId &&
-      userRole !== 'Admin'
-    ) {
-      return res.status(403).send({ message: 'You are not authorized to view this report.' });
+    // Auth Check
+    if (report.creator_id !== userId && report.project_creator_id !== userId && userRole !== 'Admin') {
+      return res.status(403).send({ message: 'Forbidden.' });
     }
 
-    // 2. Get Dictionary
+    // 2. Calculate Target Phase
+    let targetPhase = 1;
+    if (report.enable_analysis) targetPhase = 2;
+    if (report.enable_summary) targetPhase = 3;
+
+    // 3. Get Dictionary
     let dictionary = null;
     if (report.dictionary_id) {
-      const dictResult = await query(
-        `SELECT content FROM competency_dictionaries WHERE id = $1`,
-        [report.dictionary_id]
-      );
-      if (dictResult.rows.length > 0) {
-        dictionary = dictResult.rows[0].content;
-      }
+      const dictResult = await query('SELECT content FROM competency_dictionaries WHERE id = $1', [report.dictionary_id]);
+      if (dictResult.rows.length > 0) dictionary = dictResult.rows[0].content;
     }
 
-    // 3. Get Phase 1 Evidence
     const evidenceResult = await query(
-      `SELECT id, competency, level, kb, quote, source, reasoning, created_at
-       FROM evidence
-       WHERE report_id = $1 AND is_archived = false
-       ORDER BY competency, level, created_at`,
+      `SELECT * FROM evidence WHERE report_id = $1 AND is_archived = false ORDER BY competency, level, created_at`,
       [reportId]
     );
 
-    // 4. Get Raw Files
     const filesResult = await query(
-      `SELECT id, file_name, simulation_method_tag, file_content 
-      FROM report_files 
-      WHERE report_id = $1`,
+      `SELECT id, file_name, simulation_method_tag, file_content FROM report_files WHERE report_id = $1`,
       [reportId]
     );
 
-    // --- NEW: Determine Current Phase ---
-    // Check if Phase 2 data exists
-    const phase2Check = await query(
-      'SELECT 1 FROM competency_analysis WHERE report_id = $1 LIMIT 1', 
+    const analysisResult = await query(
+      `SELECT * FROM competency_analysis WHERE report_id = $1 ORDER BY competency`,
       [reportId]
     );
-    const hasPhase2 = (phase2Check.rowCount || 0) > 0;
 
-    // Check if Phase 3 data exists
-    const phase3Check = await query(
-      'SELECT 1 FROM executive_summary WHERE report_id = $1 LIMIT 1', 
+    const summaryResult = await query(
+      `SELECT * FROM executive_summary WHERE report_id = $1`,
       [reportId]
     );
-    const hasPhase3 = (phase3Check.rowCount || 0) > 0;
 
+    // Determine Phase
     let currentPhase = 1;
-    if (hasPhase3) currentPhase = 3;
-    else if (hasPhase2) currentPhase = 2;
+    if (summaryResult.rows.length > 0) currentPhase = 3;
+    else if (analysisResult.rows.length > 0) currentPhase = 2;
 
-    // Send Response
     res.status(200).json({
       title: report.title,
       status: report.status,
       projectId: report.project_id,
-      currentPhase: currentPhase,
+      targetLevels: report.target_levels,
+      currentPhase,
+      targetPhase,
       creatorId: report.creator_id,
       evidence: evidenceResult.rows,
       rawFiles: filesResult.rows,
-      dictionary: dictionary
+      competencyAnalysis: analysisResult.rows,
+      executiveSummary: summaryResult.rows[0] || null,
+      dictionary
     });
 
   } catch (error) {
-    console.error(`Error fetching data for report ${reportId}:`, error);
+    console.error(`Error fetching report data:`, error);
     res.status(500).send({ message: 'Internal server error' });
   }
 });
@@ -520,69 +517,6 @@ router.get('/:id/summary', authenticateToken, async (req: AuthenticatedRequest, 
 });
 
 /**
- * (RP-7.16) Export Report to DOCX
- */
-router.get('/:id/export', authenticateToken, async (req: AuthenticatedRequest, res) => {
-  const { id: reportId } = req.params;
-
-  try {
-    // 1. Fetch all necessary data
-    const reportRes = await query('SELECT title FROM reports WHERE id = $1', [reportId]);
-    const summaryRes = await query('SELECT * FROM executive_summary WHERE report_id = $1', [reportId]);
-    // TODO: Fetch competency analysis too if you want to include that in the report
-    
-    if (reportRes.rows.length === 0) return res.status(404).send('Report not found');
-    
-    const report = reportRes.rows[0];
-    const summary = summaryRes.rows[0] || { strengths: '', areas_for_improvement: '', recommendations: '' };
-
-    // 2. Load Template
-    // In production, you would fetch the file path from the 'projects' table
-    const templatePath = path.resolve(__dirname, '../../template.docx');
-    
-    // Check if template exists (for testing)
-    if (!fs.existsSync(templatePath)) {
-        // Fallback if no template found during dev
-        return res.status(500).send("Server Error: 'template.docx' not found in backend root.");
-    }
-
-    const content = fs.readFileSync(templatePath, 'binary');
-    const zip = new PizZip(content);
-
-    // 3. Create Document instance
-    const doc = new Docxtemplater(zip, {
-      paragraphLoop: true,
-      linebreaks: true,
-    });
-
-    // 4. Render the document (Replace placeholders)
-    doc.render({
-      title: report.title,
-      strengths: summary.strengths,
-      areas_for_improvement: summary.areas_for_improvement,
-      recommendations: summary.recommendations,
-      // Add more fields here mapping to your Word template tags
-    });
-
-    // 5. Generate buffer
-    const buf = doc.getZip().generate({
-      type: 'nodebuffer',
-      compression: 'DEFLATE',
-    });
-
-    // 6. Send file
-    const safeTitle = report.title.replace(/[^a-zA-Z0-9]/g, '_');
-    res.setHeader('Content-Disposition', `attachment; filename=${safeTitle}_Report.docx`);
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.send(buf);
-
-  } catch (error) {
-    console.error('Error exporting report:', error);
-    res.status(500).send({ message: 'Internal server error during export.' });
-  }
-});
-
-/**
  * (RP-7.13) Ask AI / Refine Text
  */
 router.post('/:id/refine', authenticateToken, async (req: AuthenticatedRequest, res) => {
@@ -602,6 +536,77 @@ router.post('/:id/refine', authenticateToken, async (req: AuthenticatedRequest, 
   } catch (error) {
     console.error("Ask AI failed:", error);
     res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+// (RP-7.17) Save Report Content (Analysis & Summary)
+router.put('/:id/content', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  const { competencyAnalysis, executiveSummary } = req.body;
+
+  const client = await query('BEGIN');
+
+  try {
+    // Save Analysis
+    if (competencyAnalysis && Array.isArray(competencyAnalysis)) {
+      for (const item of competencyAnalysis) {
+        if (item.id) {
+          await query(
+            `UPDATE competency_analysis 
+             SET level_achieved = $1, explanation = $2, development_recommendations = $3, key_behaviors_status = $4, updated_at = NOW()
+             WHERE id = $5 AND report_id = $6`,
+            [item.level_achieved, item.explanation, item.development_recommendations, JSON.stringify(item.key_behaviors_status), item.id, reportId]
+          );
+        }
+      }
+    }
+
+    // Save Summary
+    if (executiveSummary) {
+      const check = await query('SELECT id FROM executive_summary WHERE report_id = $1', [reportId]);
+      if (check.rows.length > 0) {
+        await query(
+          `UPDATE executive_summary 
+           SET strengths = $1, areas_for_improvement = $2, recommendations = $3, updated_at = NOW()
+           WHERE report_id = $4`,
+          [executiveSummary.strengths, executiveSummary.areas_for_improvement, executiveSummary.recommendations, reportId]
+        );
+      } else {
+         await query(
+          `INSERT INTO executive_summary (report_id, strengths, areas_for_improvement, recommendations)
+           VALUES ($1, $2, $3, $4)`,
+          [reportId, executiveSummary.strengths, executiveSummary.areas_for_improvement, executiveSummary.recommendations]
+        );
+      }
+    }
+
+    await query('COMMIT');
+    res.status(200).send({ message: "Report content saved successfully." });
+
+  } catch (error) {
+    await query('ROLLBACK');
+    console.error("Error saving report:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+// --- (RP-7.18) Export Report ---
+router.get('/:id/export', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  try {
+    const { buffer, filename } = await generateReportDocx(reportId);
+    
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.send(buffer);
+
+  } catch (error: any) {
+    console.error("Export failed:", error);
+    // Send friendly error if validation failed
+    if (error.message.includes("Cannot export")) {
+        return res.status(400).send({ message: error.message });
+    }
+    res.status(500).send({ message: "Internal server error during export." });
   }
 });
 

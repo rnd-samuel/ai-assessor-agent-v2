@@ -1,7 +1,6 @@
 // frontend/src/AppRoutes.tsx
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useUserStore } from './state/userStore';
-import { useState } from 'react';
 
 // Layouts & Pages
 import MainLayout from './layouts/MainLayout';
@@ -25,8 +24,6 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 export default function AppRoutes() {
   const isAuthenticated = useUserStore((state) => state.isAuthenticated);
 
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
-
   return (
     <BrowserRouter>
       <Routes>
@@ -35,33 +32,32 @@ export default function AppRoutes() {
           element={isAuthenticated ? <Navigate to="/projects" replace /> : <LoginPage />} 
         />
 
-        {/* --- (FIXED) ORDER MATTERS: Put more specific routes first --- */}
-
+        {/* Specific Routes */}
         <Route 
-          path="/projects/new" // <-- Specific route
+          path="/projects/new" 
           element={
             <ProtectedRoute>
-              <MainLayout setRefreshTrigger={setRefreshTrigger}>
+              <MainLayout>
                 <NewProjectPage />
               </MainLayout>
             </ProtectedRoute>
           } 
         />
         <Route 
-          path="/projects/:projectId" // <-- Dynamic route
+          path="/projects/:projectId" 
           element={
             <ProtectedRoute>
-              <MainLayout setRefreshTrigger={setRefreshTrigger}>
+              <MainLayout>
                 <ReportsDashboard />
               </MainLayout>
             </ProtectedRoute>
           } 
         />
         <Route 
-          path="/projects" // <-- General route
+          path="/projects" 
           element={
             <ProtectedRoute>
-              <MainLayout setRefreshTrigger={setRefreshTrigger}>
+              <MainLayout>
                 <ProjectsDashboard />
               </MainLayout>
             </ProtectedRoute>
@@ -69,24 +65,21 @@ export default function AppRoutes() {
         />
 
         <Route 
-          path="/projects/:projectId/reports/new" // <-- Specific route
+          path="/projects/:projectId/reports/new" 
           element={
             <ProtectedRoute>
-              <MainLayout setRefreshTrigger={setRefreshTrigger}>
+              <MainLayout>
                 <NewReportPage />
               </MainLayout>
             </ProtectedRoute>
           } 
         />
         <Route 
-          path="/reports/:id" // <-- Dynamic route
+          path="/reports/:id" 
           element={
             <ProtectedRoute>
-              <MainLayout setRefreshTrigger={setRefreshTrigger}>
-                <ReportPage 
-                  refreshTrigger={refreshTrigger}
-                  setRefreshTrigger={setRefreshTrigger}
-                 />
+              <MainLayout>
+                <ReportPage />
               </MainLayout>
             </ProtectedRoute>
           } 
@@ -101,7 +94,7 @@ export default function AppRoutes() {
           } 
         />
 
-        {/* --- Default route --- */}
+        {/* Default Routes */}
         <Route 
           path="/" 
           element={<Navigate to={isAuthenticated ? "/projects" : "/login"} replace />}

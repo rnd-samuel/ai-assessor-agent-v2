@@ -1,6 +1,7 @@
 // backend/src/routes/admin.routes.ts
 import { Router, Request } from 'express';
 import { authenticateToken, authorizeRole } from '../middleware/auth.middleware';
+import { aiGenerationQueue } from '../services/queue';
 import { query } from '../services/db';
 import multer from 'multer';
 import bcrypt from 'bcrypt';
@@ -18,6 +19,52 @@ const router = Router();
 
 // Middleware: All routes here require 'Admin' role
 router.use(authenticateToken, authorizeRole('Admin'));
+
+/**
+ * (ADM-8.2) Get Usage Stats
+ * Mocked for now, but structured for the frontend.
+ */
+router.get('/stats/usage', async (req: AuthenticatedRequest, res) => {
+  try {
+    // In a real app, you'd query a 'usage_logs' table here.
+    const stats = {
+        apiRequests: [120, 150, 180, 220, 190, 240, 260], // Last 7 days
+        tokenUsage: {
+            input: [50000, 60000, 55000, 70000, 65000, 75000, 80000],
+            output: [20000, 25000, 22000, 30000, 28000, 32000, 35000]
+        },
+        avgWaitTime: [15.2, 12.5, 18.1],
+        errorRate: 1.2,
+        totalCost: 123.45
+    };
+    res.json(stats);
+  } catch (error) {
+    console.error("Error fetching usage stats:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (ADM-8.3) Get Queue Stats
+ * Real data from BullMQ.
+ */
+router.get('/stats/queue', async (req: AuthenticatedRequest, res) => {
+  try {
+    const counts = await aiGenerationQueue.getJobCounts(
+        'active', 'completed', 'failed', 'delayed', 'waiting'
+    );
+    
+    res.json({
+        active: counts.active,
+        completed: counts.completed,
+        failed: counts.failed,
+        waiting: counts.waiting + counts.delayed
+    });
+  } catch (error) {
+    console.error("Error fetching queue stats:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
 
 /**
  * (ADM-8.6) Get all Competency Dictionaries

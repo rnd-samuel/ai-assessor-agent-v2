@@ -1,90 +1,88 @@
 // frontend/src/layouts/MainLayout.tsx
 import { useEffect, type ReactNode } from 'react';
+import { useLocation } from 'react-router-dom'; // Import useLocation
 import Sidebar from '../components/Sidebar';
-import { io } from 'socket.io-client';
+import { connectSocket } from '../services/socket'; // Import service
 import { useUserStore } from '../state/userStore';
 import ToastContainer from '../components/ToastContainer';
 import { useToastStore } from '../state/toastStore';
 
-// This component will wrap our pages (like ProjectsDashboard, ReportPage, etc.)
-// We use 'children' to render whatever page is active.
 export default function MainLayout({ 
   children,
   setRefreshTrigger
 }: { 
   children: ReactNode,
-  setRefreshTrigger?: (cb: (c: number) => number) => void // <-- Add '?'
+  setRefreshTrigger?: (cb: (c: number) => number) => void
 }) {
   const userId = useUserStore((state) => state.userId);
   const addToast = useToastStore((state) => state.addToast);
+  const location = useLocation(); // Get current route
 
   useEffect(() => {
-    if (!userId) return; // Don't connect if there's no user
+    if (!userId) return;
 
-    // Connect to the backend socket server
-    // (We pass the userId in the query to join the correct private room)
-    const socket = io('http://localhost:3001', {
-      query: { userId },
-    });
+    // Use the singleton service
+    const socket = connectSocket(userId);
 
-    socket.on('connect', () => {
-      console.log('Socket.io connected:', socket.id);
-    });
-
-    // (GBL-2.7) Listen for our custom events from the worker
-    socket.on('generation-complete', (data: {
+    const onGenerationComplete = (data: {
       message: string,
       reportId: string,
       status: string
     }) => {
-      console.log('Generation complete:', data.message);
+      console.log('Socket Event (MainLayout):', data.message);
+
+      // CHECK: Are we currently viewing this specific report?
+      // If yes, we let ReportPage handle the logic (Fetch -> Toast) to avoid race conditions.
+      const isOnReportPage = location.pathname.includes(`/reports/${data.reportId}`);
+
+      if (isOnReportPage) {
+        console.log('MainLayout: User is on the report page. Skipping global toast to allow local handling.');
+        return; 
+      }
+
+      // Otherwise (Dashboard, other report, admin panel), show toast immediately
       addToast(data.message, 'success');
 
-      // Check if we are on the report page that just finished
-      if (data.status === 'COMPLETED' && window.location.pathname.includes(`/reports/${data.reportId}`)) {
-        // Safety check before calling the optional prop
-        if (setRefreshTrigger) {
-          setRefreshTrigger(c => c + 1);
-        } else {
-          // Fallback for pages that don't have it (like /admin)
-          window.location.reload();
-        }
+      // And trigger a generic refresh (good for Dashboards)
+      if (setRefreshTrigger) {
+        setRefreshTrigger(c => c + 1);
       }
-    });
+    };
 
-    socket.on('generation-failed', (data: { 
+    const onGenerationFailed = (data: { 
       message: string, 
       reportId: string,
       status: string 
     }) => {
       console.error('Generation failed:', data.message);
-      addToast(data.message, 'error');
-
-      // Also reload on failure to show the 'FAILED' status
-      if (data.status === 'FAILED' && window.location.pathname.includes(`/reports/${data.reportId}`)) {
-        if (setRefreshTrigger) {
-          setRefreshTrigger(c => c + 1);
-        } else {
-          window.location.reload();
-        }
+      
+      const isOnReportPage = location.pathname.includes(`/reports/${data.reportId}`);
+      
+      // Let ReportPage handle local errors too for consistency
+      if (isOnReportPage) {
+          return;
       }
-    });
 
-    // Clean up the connection when the component unmounts
-    return () => {
-      socket.disconnect();
+      addToast(data.message, 'error');
+      if (setRefreshTrigger) setRefreshTrigger(c => c + 1);
     };
-  }, [userId, addToast, setRefreshTrigger]);
+
+    socket.on('generation-complete', onGenerationComplete);
+    socket.on('generation-failed', onGenerationFailed);
+
+    return () => {
+      socket.off('generation-complete', onGenerationComplete);
+      socket.off('generation-failed', onGenerationFailed);
+      // We don't disconnect here because we want the socket to persist 
+    };
+  }, [userId, addToast, setRefreshTrigger, location.pathname]); 
+
   return (
     <div className="flex h-screen bg-bg-light">
       <Sidebar />
-
-      {/* Main Content Area */}
       <main className="flex-1 h-screen overflow-y-auto bg-bg-medium">
-        {/* This renders the active page (e.g., ProjectsDashboard) */}
         {children}
       </main>
-
       <ToastContainer />
     </div>
   );

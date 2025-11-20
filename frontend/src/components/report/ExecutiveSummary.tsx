@@ -1,8 +1,7 @@
 // frontend/src/components/report/ExecutiveSummary.tsx
-import { useState, useEffect } from 'react';
-import apiService from '../../services/apiService';
+import { useRef, useLayoutEffect } from 'react';
 
-interface SummaryData {
+export interface SummaryData {
   id: string;
   strengths: string;
   areas_for_improvement: string;
@@ -13,53 +12,50 @@ interface ExecutiveSummaryProps {
   reportId: string;
   isViewOnly: boolean;
   onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
+  
+  // --- New Props ---
+  data: SummaryData | null;
+  onChange: (newData: SummaryData) => void;
 }
 
+const AutoTextarea = (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [props.value]);
+
+  return <textarea ref={textareaRef} {...props} />;
+};
+
 export default function ExecutiveSummary({
-  reportId,
+  // reportId,
   isViewOnly,
   onAskAI,
+  data,
+  onChange
 }: ExecutiveSummaryProps) {
-  const [data, setData] = useState<SummaryData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  
+  const isEmpty = !data || (!data.strengths && !data.areas_for_improvement && !data.recommendations);
 
-  // Data Fetching
-  useEffect(() => {
-    const fetchData = async () => {
-      if (!reportId) return;
-      try {
-        setIsLoading(true);
-        const response = await apiService.get(`/reports/${reportId}/summary`);
-        setData(response.data);
-      } catch (err) {
-        console.error("Failed to fetch summary:", err);
-        setError("Failed to load executive summary.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [reportId]);
-
-  // Handle Local Updates (Debounced save would go here in production)
+  // Handle Local Updates
   const handleChange = (field: keyof SummaryData, value: string) => {
     if (!data) return;
-    setData({ ...data, [field]: value });
-    // TODO: Autosave to backend
+    const newData = { ...data, [field]: value };
+    onChange(newData); // Update parent state
   };
 
-  if (isLoading) return <div className="p-10 text-center text-text-muted">Loading summary...</div>;
-  if (error) return <div className="p-10 text-center text-error">{error}</div>;
-
-  if (!data) {
+  if (isEmpty) {
     return (
-      <div className="text-center p-12 border-2 border-dashed border-border rounded-lg m-6">
-        <h3 className="text-lg font-semibold text-text-primary">Summary Not Generated</h3>
-        <p className="text-text-muted mt-1">
-          Please go back to the Analysis tab and click "Generate Final Summary".
-        </p>
+      <div className="flex flex-col items-center justify-center h-full min-h-[300px] text-center border-2 border-dashed border-border rounded-lg m-6 bg-bg-light/50">
+        <div className="space-y-3">
+          <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto"></div>
+          <p className="text-text-primary font-medium">Generating Summary...</p>
+          <p className="text-xs text-text-muted">This may take a moment.</p>
+        </div>
       </div>
     );
   }
@@ -84,11 +80,12 @@ export default function ExecutiveSummary({
               className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
               title="Ask AI to refine"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+               {/* Icon... */}
+               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
             </button>
           )}
         </div>
-        <textarea
+        <AutoTextarea
           rows={4}
           className="w-full rounded-md border border-border p-3 bg-white shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
           value={data.strengths}
@@ -109,13 +106,12 @@ export default function ExecutiveSummary({
                 (newText) => handleChange('areas_for_improvement', newText)
               )}
               className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
-              title="Ask AI to refine"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
             </button>
           )}
         </div>
-        <textarea
+        <AutoTextarea
           rows={4}
           className="w-full rounded-md border border-border p-3 bg-white shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
           value={data.areas_for_improvement}
@@ -136,13 +132,12 @@ export default function ExecutiveSummary({
                 (newText) => handleChange('recommendations', newText)
               )}
               className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
-              title="Ask AI to refine"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
             </button>
           )}
         </div>
-        <textarea
+        <AutoTextarea
           rows={4}
           className="w-full rounded-md border border-border p-3 bg-white shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
           value={data.recommendations}

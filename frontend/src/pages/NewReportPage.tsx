@@ -2,6 +2,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import apiService from '../services/apiService';
+import LoadingButton from '../components/LoadingButton';
+import DragDropUploader from '../components/DragDropUploader';
 
 // Define data types
 interface Competency {
@@ -92,6 +94,8 @@ export default function NewReportPage() {
 
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isGeneratingDisabled, setIsGeneratingDisabled] = useState(true);
+
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const [competencies, setCompetencies] = useState<Competency[]>([]);
   const [simulationMethods, setSimulationMethods] = useState<SimulationMethod[]>([]);
@@ -209,7 +213,8 @@ export default function NewReportPage() {
     }));
     // We'll add this to the payload later.
     console.log("File methods:", fileMethods);
-    
+
+    setIsGenerating(true);
     try {
       const payload = {
         title,
@@ -246,6 +251,7 @@ export default function NewReportPage() {
     } catch (error) {
       console.error("Failed to create report:", error);
       alert("Error: Could not create report.");
+      setIsGenerating(false);
     }
   };
 
@@ -269,15 +275,12 @@ export default function NewReportPage() {
             {/* 2. Upload Assessment Results (U23, U24) */}
             <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
               <label className="text-lg font-semibold text-text-primary mb-3 block">Assessment Results</label>
-              <div 
-                id="file-uploader" 
-                className="w-full border-2 border-dashed border-border rounded-lg bg-bg-medium p-8 text-center cursor-pointer hover:border-primary"
-                onClick={() => document.getElementById('file-input')?.click()}
-              >
-                 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-text-muted mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
-                <p className="text-xs text-text-muted mt-1">PDF, DOCX, or TXT (Multi-file supported)</p>
-              </div>
+              <DragDropUploader 
+                onUpload={handleFilesUpload} // Directly pass the handler!
+                acceptedTypes=".pdf,.docx,.txt"
+                multiple={true}
+                subLabel="PDF, DOCX, or TXT (Multi-file supported)"
+              />
               <input 
                 type="file" 
                 id="file-input" 
@@ -366,14 +369,15 @@ export default function NewReportPage() {
               >
                 Cancel
               </button>
-              <button 
+              <LoadingButton
                 id="generate-btn" 
-                className={`bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors ${isGeneratingDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                isLoading={isGenerating}
+                loadingText="Generating..."
                 disabled={isGeneratingDisabled}
                 onClick={handleGenerateReport}
               >
                 Generate Report
-              </button>
+              </LoadingButton>
             </div>
         </div>
       </main>

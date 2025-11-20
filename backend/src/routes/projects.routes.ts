@@ -2,7 +2,9 @@
 import { Router, Request } from 'express';
 import { authenticateToken, authorizeRole } from '../middleware/auth.middleware';
 import { query } from '../services/db';
+import { uploadToGCS } from '../services/storage';
 import multer from 'multer';
+import crypto from 'crypto';
 
 // Extend Request type to include 'user'
 interface AuthenticatedRequest extends Request {
@@ -18,7 +20,73 @@ const upload = multer({ storage: storage });
 
 const router = Router();
 
-// --- (FR-PROJ-002 / PD-3.4) Get Project List (with search) ---
+// Helper: Calculate MD5 Hash of a buffer
+const calculateHash = (buffer: Buffer): string => {
+  return crypto.createHash('md5').update(buffer).digest('hex');
+};
+
+// --- (FR-PROJ-001) Create New Project ---
+router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), async (req: AuthenticatedRequest, res) => {
+  const { name, userIds, prompts, dictionaryId, simulationMethodIds } = req.body;
+  const creatorId = req.user?.userId;
+
+  if (!name || !prompts || !dictionaryId || !userIds) {
+    return res.status(400).send({ message: "Missing required fields." });
+  }
+
+  // VALIDATION: Check for duplicate name for this creator
+  try {
+    const duplicateCheck = await query(
+      `SELECT id FROM projects
+       WHERE lower(name) = lower($1)
+         AND creator_id = $2
+         AND is_archived = false`,
+      [name, creatorId]
+    );
+    if (duplicateCheck.rows.length > 0) {
+      return res.status(409).send({ message: "You already have an active project with this name." });
+    }
+
+    await query('BEGIN');
+
+    const projectResult = await query(
+      "INSERT INTO projects (name, creator_id, dictionary_id) VALUES ($1, $2, $3) RETURNING id",
+      [name, creatorId, dictionaryId]
+    );
+    const projectId = projectResult.rows[0].id;
+
+    await query(
+      `INSERT INTO project_prompts (project_id, general_context, persona_prompt, evidence_prompt, analysis_prompt, summary_prompt)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [projectId, prompts.general_context, prompts.persona_prompt, prompts.evidence_prompt, prompts.analysis_prompt, prompts.summary_prompt]
+    );
+
+    const allUserIds = [...new Set([...userIds, creatorId])];
+    for (const userId of allUserIds) {
+      await query("INSERT INTO project_users (project_id, user_id) VALUES ($1, $2)", [projectId, userId]);
+    }
+
+    if (simulationMethodIds && Array.isArray(simulationMethodIds)) {
+      for (const methodId of simulationMethodIds) {
+        await query("INSERT INTO projects_to_global_methods (project_id, method_id) VALUES ($1, $2)", [projectId, methodId]);
+      }
+    }
+
+    await query('COMMIT');
+    res.status(201).json({ message: "Project created successfully", projectId });
+
+  } catch (error: any) {
+    await query('ROLLBACK');
+    // Handle Unique Constraint Violation from DB (double safety)
+    if (error.code === '23505') {
+        return res.status(409).send({ message: "Project name must be unique among your active projects." });
+    }
+    console.error("Error creating project:", error);
+    res.status(500).send({ message: "Internal server error." });
+  }
+});
+
+// --- (FR-PROJ-002) Get Project List ---
 // This route is protected. A user MUST be logged in to see it.
 router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const userId = req.user?.userId;
@@ -84,81 +152,6 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
   } catch (error) {
     console.error("Error fetching projects:", error);
     res.status(500).send({ message: "Internal server error" });
-  }
-});
-
-/**
- * (FR-PROJ-001) Create New Project
- * (P6) Must be a Project Manager or Admin
- */
-router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), async (req: AuthenticatedRequest, res) => {
-  const { name, userIds, prompts, dictionaryId, simulationMethodIds } = req.body;
-  const creatorId = req.user?.userId;
-
-  if (!name || !prompts || !dictionaryId || !userIds || !Array.isArray(userIds)) {
-    return res.status(400).send({ message: "Missing required fields: name, userIds, prompts, dictionaryId" });
-  }
-
-  // We use a database transaction to ensure all queries succeed or fail together.
-  const client = await query('BEGIN'); // Start transaction
-
-  try {
-    // 1. Create the Project
-    const projectResult = await query(
-      "INSERT INTO projects (name, creator_id, dictionary_id) VALUES ($1, $2, $3) RETURNING id",
-      [name, creatorId, dictionaryId]
-    );
-    const projectId = projectResult.rows[0].id;
-
-    // 2. Save the Prompts (P12)
-    await query(
-      `INSERT INTO project_prompts (project_id, general_context, persona_prompt, evidence_prompt, analysis_prompt, summary_prompt)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        projectId,
-        prompts.general_context,
-        prompts.persona_prompt,
-        prompts.evidence_prompt,
-        prompts.analysis_prompt,
-        prompts.summary_prompt
-      ]
-    );
-
-    // 3. Link the invited users (P13)
-    // We also add the creator to their own project
-    const allUserIds = [...new Set([...userIds, creatorId])]; // Add creator
-
-    for (const userId of allUserIds) {
-      await query(
-        "INSERT INTO project_users (project_id, user_id) VALUES ($1, $2)",
-        [projectId, userId]
-      );
-    }
-
-    // Link the selected simulation methods (NP-4.5)
-    if (simulationMethodIds && Array.isArray(simulationMethodIds)) {
-      for (const methodId of simulationMethodIds) {
-        await query(
-          // TODO: This table name must match your database
-          "INSERT INTO projects_to_global_methods (project_id, method_id) VALUES ($1, $2)",
-          [projectId, methodId]
-        );
-      }
-    }
-
-    // If all queries were successful, commit the transaction
-    await query('COMMIT');
-
-    res.status(201).json({ 
-      message: "Project created successfully",
-      projectId: projectId 
-    });
-
-  } catch (error) {
-    // If any query failed, roll back all changes
-    await query('ROLLBACK');
-    console.error("Error creating project:", error);
-    res.status(500).send({ message: "Internal server error during project creation." });
   }
 });
 
@@ -230,58 +223,50 @@ router.get('/:id/form-data', authenticateToken, async (req, res) => {
   }
 });
 
-/**
- * (NP-4.2, 4.3, 4.5) Handle file uploads for a specific project
- * This route expects 'multipart/form-data'
- * It uses the 'upload.single('file')' middleware to process one file.
- */
+// --- (NP-4.2/4.3) Upload Project Files (GCS + Duplicate Check) ---
 router.post('/:id/upload', authenticateToken, authorizeRole('Admin', 'Project Manager'), upload.single('file'),
   async (req, res) => {
     const { id: projectId } = req.params;
-    const { fileType } = req.body;
+    const { fileType } = req.body; // 'template', 'knowledgeBase', 'simulationMethod'
     const file = req.file;
 
-    if (!file) {
-      return res.status(400).send({ message: 'No file uploaded.' });
-    }
-
-    if (!fileType) {
-      return res.status(400).send({ message: 'Missing fileType.' });
-    }
-
-    console.log(`[File Upload] ProjectID: ${projectId}`);
-    console.log(`[File Upload] FileType: ${fileType}`);
-    console.log(`[File Upload] OriginalName: ${file.originalname}`);
-    console.log(`[File Upload] Size: ${file.size} bytes`);
+    if (!file || !fileType) return res.status(400).send({ message: 'File or fileType missing.' });
 
     try {
-      // --- This is where you will add GCS and BullMQ logic later ---
-      // TODO (Step 1): Upload file.buffer to Google Cloud Storage
-      // const gcsUrl = await uploadToGCS(file.buffer, file.originalname);
+      // 1. Calculate Hash
+      const fileHash = calculateHash(file.buffer);
 
-      // TODO (Step 2): Save file metadata to the database
-      // await query(
-      //   "INSERT INTO project_files (project_id, file_name, gcs_url, file_type) VALUES ($1, $2, $3, $4)",
-      //   [projectId, file.originalname, gcsUrl, fileType]
-      // );
+      // 2. Check for Duplicates in this Project
+      // We assume duplicate means: Same Project AND Same Content Hash
+      // This ensures "Same file names (or content) uploaded in DIFFERENT projects are allowed"
+      const duplicateCheck = await query(
+        "SELECT id FROM project_files WHERE project_id = $1 AND file_hash = $2",
+        [projectId, fileHash]
+      );
+
+      if (duplicateCheck.rows.length > 0) {
+        return res.status(409).send({ message: `File '${file.originalname}' is a duplicate in this project.` });
+      }
+
+      // 3. Upload to GCS
+      const folder = `projects/${projectId}/${fileType}`;
+      const gcsPath = await uploadToGCS(file.buffer, file.originalname, folder);
+
+      // 4. Save to DB
+      await query(
+        `INSERT INTO project_files (project_id, file_name, gcs_path, file_type, file_hash) 
+         VALUES ($1, $2, $3, $4, $5)`,
+        [projectId, file.originalname, gcsPath, fileType, fileHash]
+      );
       
-      // TODO (Step 3): If it's a KB file, queue an ingestion job
-      // if (fileType === 'knowledgeBase' || fileType === 'simulationMethod') {
-      //   await fileIngestionQueue.add('ingest-file', { projectId, gcsUrl });
-      // }
-
-      // For now, just send success
-      res.status(200).send({
-        message: 'File uploaded successfully (placeholder)',
-        filename: file.originalname,
-      });
+      res.status(200).send({ message: 'File uploaded successfully.', filename: file.originalname });
 
     } catch (error) {
-      console.error('File upload failed', error);
-      res.status(500).send({ message: 'Internal server error during file upload.' });
+      console.error('File upload failed:', error);
+      res.status(500).send({ message: 'Internal server error.' });
     }
   }
-)
+);
 
 /**
  * (P16, U16, RD-5.5) Get all reports for a specific project (with search)

@@ -32,7 +32,6 @@ export default function EvidenceCard({
 }: EvidenceCardProps) {
   const [showReasoning, setShowReasoning] = useState(false);
 
-  // Resolve Competency Name from Dictionary
   let competencyName = evidence.competency;
   if (dictionary?.kompetensi) {
     const comp = dictionary.kompetensi.find((c: any) =>
@@ -47,8 +46,8 @@ export default function EvidenceCard({
     <div
       className={`w-full rounded-lg shadow-sm bg-bg-light border transition-all duration-200 ${
         isActive ? 'border-primary ring-1 ring-primary shadow-md' : 'border-border hover:border-primary/50'
-      } ${!isViewOnly ? 'cursor-pointer' : ''}`}
-      onClick={!isViewOnly ? onClick : undefined}
+      } cursor-pointer`} // Always cursor-pointer
+      onClick={onClick} // Always enable click (highlighting)
     >
       {showReasoning ? (
         <div className="p-4 animate-fade-in">

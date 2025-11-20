@@ -6,6 +6,7 @@ import apiService from '../services/apiService';
 import { useToastStore } from '../state/toastStore';
 import ProjectContextModal from '../components/ProjectContextModal';
 import { useProjectStore } from '../state/projectStore';
+import LoadingButton from '../components/LoadingButton';
 
 // Define the Report type
 interface Report {
@@ -36,6 +37,7 @@ export default function ReportsDashboard() {
   const [reports, setReports] = useState<Report[]>([]);
   const [archivedReports, setArchivedReports] = useState<Report[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // State for modals
   const [modals, setModals] = useState({
@@ -139,6 +141,7 @@ export default function ReportsDashboard() {
       return;
     }
 
+    setIsProcessing(true);
     try {
       // Loop and call the API for each report
       for (const id of idsToArchive) {
@@ -155,6 +158,8 @@ export default function ReportsDashboard() {
     } catch (error) {
       console.error("Failed to archive report(s):", error);
       addToast("Error: Could not archive report(s).", 'error');
+    } finally {
+      setIsProcessing(false);
     }
   }
 
@@ -172,6 +177,7 @@ export default function ReportsDashboard() {
       return;
     }
 
+    setIsProcessing(true);
     try {
       for (const id of idsToUnarchive) {
         // Call the endpoint you created in Step 8
@@ -190,6 +196,8 @@ export default function ReportsDashboard() {
     } catch (error) {
       console.error("Failed to unarchive report(s):", error);
       addToast("Error: Could not unarchive report(s).", 'error');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -470,7 +478,7 @@ export default function ReportsDashboard() {
                 {/* --- REAL DATA MAP --- */}
                 {!isLoading && sortedReports.map((report) => { // Use sortedReports
                   return (
-                    <tr key={report.id} className="border-b border-border">
+                    <tr key={report.id} className="border-b border-border hover:bg-bg-medium">
                       <td className="p-3 w-12 text-center">
                         <input
                           type="checkbox"
@@ -535,8 +543,21 @@ export default function ReportsDashboard() {
             <h3 className="text-lg font-semibold text-text-primary">Are you sure?</h3>
             <p className="text-sm text-text-secondary mt-2">This action will archive the selected report(s).</p>
             <div className="flex justify-end gap-3 mt-6">
-              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('archive')}>Cancel</button>
-              <button className="bg-error text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-red-700" onClick={handleArchive}>Archive</button>
+              <button 
+                className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" 
+                onClick={() => closeModal('archive')}
+                disabled={isProcessing}
+              >
+                  Cancel
+              </button>
+              <LoadingButton 
+                variant="danger"
+                onClick={handleArchive}
+                isLoading={isProcessing}
+                loadingText="Archiving..."
+              >
+                Archive
+              </LoadingButton>
             </div>
           </div>
         </div>
@@ -554,13 +575,21 @@ export default function ReportsDashboard() {
             This action will restore the selected report(s) to the active list.
           </p>
           <div className="flex justify-end gap-3 mt-6">
-            <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('unarchive')}>
+            <button 
+              className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" 
+              onClick={() => closeModal('unarchive')}
+              disabled={isProcessing}
+            >
               Cancel
             </button>
-            {/* --- UPDATED onClick --- */}
-            <button className="bg-info text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-blue-700" onClick={handleUnarchive}>
+            <LoadingButton
+              variant="info"
+              onClick={handleUnarchive}
+              isLoading={isProcessing}
+              loadingText="Restoring..."
+            >
               Unarchive
-            </button>
+            </LoadingButton>
           </div>
         </div>
       </div>

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import apiService from '../services/apiService';
 import { useNavigate } from 'react-router-dom';
 import { useProjectStore } from '../state/projectStore';
+import DragDropUploader from '../components/DragDropUploader';
 
 // Define the type for our tabs to make it safer
 type SectionId = 
@@ -300,21 +301,12 @@ return (
               />
 
               {/* Uploader UI */}
-              <div
-                className="w-full border-2 border-dashed border-border rounded-lg bg-bg-light p-8 text-center cursor-pointer hover:border-primary"
-                onClick={() => document.getElementById('template-file-input')?.click()}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-text-muted mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-
-                {/* Show selected file name */}
-                {templateFile ? (
-                  <p className="text-sm font-semibold text-text-primary">{templateFile.name}</p>
-                ) : (
-                  <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
-                )}
-
-                <p className="text-xs text-text-muted mt-1">.docx format only</p>
-              </div>
+                <DragDropUploader
+                  onUpload={(files) => setTemplateFile(files[0])}
+                  acceptedTypes=".docx"
+                  subLabel=".docx format only"
+                  label={templateFile ? `Selected: ${templateFile.name}` : "Click to upload or drag and drop"}
+                />
               {/* This is a placeholder, will be wired up later */}
               <div className="bg-bg-light rounded-lg border border-border p-4 hidden">
                 <h3 className="text-base font-semibold text-text-primary mb-3">Placeholder Fields</h3>
@@ -341,14 +333,12 @@ return (
                 }}
               />
               {/* Uploader UI */}
-              <div 
-                className="w-full border-2 border-dashed border-border rounded-lg bg-bg-light p-8 text-center cursor-pointer hover:border-primary"
-                onClick={() => document.getElementById('kb-file-input')?.click()}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-text-muted mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
-                <p className="text-xs text-text-muted mt-1">.pdf, .docx, .txt</p>
-              </div>
+              <DragDropUploader 
+                onUpload={(files) => setKbFiles(Array.from(files))}
+                acceptedTypes=".pdf,.docx,.txt"
+                multiple={true}
+                subLabel=".pdf, .docx, .txt"
+              />
 
               {/* --- NEW: Show list of selected files --- */}
               {kbFiles.length > 0 && (
@@ -511,26 +501,12 @@ return (
               <div>
                 <label className="text-sm font-medium mb-1 block">Upload new simulation method data</label>
                 {/* --- NEW: Hidden file input for Sim --- */}
-                <input 
-                  type="file" 
-                  id="sim-file-input"
-                  className="hidden"
-                  accept=".pdf,.docx,.txt"
-                  multiple
-                  onChange={(e) => {
-                    if (e.target.files) {
-                      setSimFiles(Array.from(e.target.files));
-                    }
-                  }}
+                 <DragDropUploader
+                   onUpload={(files) => setSimFiles(Array.from(files))}
+                   acceptedTypes=".pdf,.docx,.txt"
+                   multiple={true}
+                   subLabel=".pdf, .docx, .txt"
                 />
-                 <div 
-                   className="w-full border-2 border-dashed border-border rounded-lg bg-bg-light p-8 text-center cursor-pointer hover:border-primary"
-                   onClick={() => document.getElementById('sim-file-input')?.click()}
-                 >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-text-muted mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                    <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
-                    <p className="text-xs text-text-muted mt-1">.pdf, .docx, .txt</p>
-                </div>
 
                 {/* --- Show list of selected files --- */}
                 {simFiles.length > 0 && (

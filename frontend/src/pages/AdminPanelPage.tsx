@@ -71,6 +71,9 @@ export default function AdminPanelPage() {
   // (A5) State for Model Filter
   const [modelFilterOpen, setModelFilterOpen] = useState(false);
 
+  // State for queue dashboard
+  const [queueStats, setQueueStats] = useState({ active: 0, completed: 0, failed: 0, waiting: 0 });
+
   // State for Dictionaries
   const [dictionaries, setDictionaries] = useState<{id: string, name: string, created_at: string}[]>([]);
   const [isUploadingDict, setIsUploadingDict] = useState(false);
@@ -170,6 +173,14 @@ export default function AdminPanelPage() {
     }
     // No cleanup function needed here as we want to preserve the instance
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'queue') {
+      apiService.get('/admin/stats/queue')
+        .then(res => setQueueStats(res.data))
+        .catch(console.error);
+    }
+  }, [activeTab])
 
   const fetchDictionaries = async () => {
     try {
@@ -473,11 +484,22 @@ export default function AdminPanelPage() {
 
           {/* Queue Dashboard Tab (A6) */}
           {activeTab === 'queue' && (
-            <div className="space-y-6">
-              <h3 className="text-lg font-semibold text-text-primary">Queue Dashboard</h3>
-              <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
-                <p className="text-sm text-text-muted mb-4">(Placeholder for BullMQ UI)</p>
-                {/* ... (Placeholder table from mockup) ... */}
+            <div className="grid grid-cols-4 gap-6">
+              <div className="bg-white p-6 rounded-lg shadow border border-border">
+                <h4 className="text-sm text-text-muted">Active Jobs</h4>
+                <p className="text-3xl font-bold text-primary">{queueStats.active}</p>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow border border-border">
+                <h4 className="text-sm text-text-muted">Waiting</h4>
+                <p className="text-3xl font-bold text-warning">{queueStats.waiting}</p>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow border border-border">
+                <h4 className="text-sm text-text-muted">Completed</h4>
+                <p className="text-3xl font-bold text-success">{queueStats.completed}</p>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow border border-border">
+                <h4 className="text-sm text-text-muted">Failed</h4>
+                <p className="text-3xl font-bold text-error">{queueStats.failed}</p>
               </div>
             </div>
           )}

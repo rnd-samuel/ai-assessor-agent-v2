@@ -3,6 +3,7 @@ import { Router } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { query } from '../services/db';
+import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
 
@@ -15,12 +16,11 @@ router.post('/login', async (req, res) => {
       return res.status(400).send({ message: "Email and password are required." });
     }
 
-    // --- 1. Find the User (REAL) ---
+    // --- 1. Find the User ---
     const result = await query("SELECT * FROM users WHERE email = $1", [email.toLowerCase()]);
     const user = result.rows[0];
 
     if (!user) {
-      // (U2) "E-mail or Password is incorrect"
       return res.status(401).send({ message: "Invalid credentials" });
     }
 
@@ -28,7 +28,6 @@ router.post('/login', async (req, res) => {
     const isPasswordMatch = await bcrypt.compare(password, user.password_hash);
 
     if (!isPasswordMatch) {
-      // (U2) "E-mail or Password is incorrect"
       return res.status(401).send({ message: "Invalid credentials" });
     }
 
@@ -38,11 +37,11 @@ router.post('/login', async (req, res) => {
     const token = jwt.sign(
       { 
         userId: user.id, 
-        role: user.role, // (FR-AUTH-001)
+        role: user.role, 
         name: user.name
       },
       jwtSecret,
-      { expiresIn: '8h' } // Lengthened session
+      { expiresIn: '8h' }
     );
 
     // --- 4. Send Response ---
@@ -60,12 +59,18 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// --- /register route to create our admin user ---
-// We'll use this ONCE to create our user, then we can remove it.
+// --- (SECURED) Register Route ---
+// Requires ADMIN_INVITE_CODE in body to create an account.
 router.post('/register', async (req, res) => {
-  const { email, password, role, name } = req.body;
+  const { email, password, role, name, inviteCode } = req.body;
+  
   if (!email || !password || !role || !name) {
     return res.status(400).send({ message: "Email, password, role, and name are required." });
+  }
+
+  // SECURITY CHECK
+  if (inviteCode !== process.env.ADMIN_INVITE_CODE) {
+    return res.status(403).send({ message: "Invalid invite code." });
   }
 
   try {
@@ -80,10 +85,39 @@ router.post('/register', async (req, res) => {
     );
 
     res.status(201).send(newUser.rows[0]);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Registration error:", error);
-    res.status(500).send({ message: "User likely already exists." });
+    if (error.code === '23505') { // Unique violation code for Postgres
+        return res.status(409).send({ message: "User already exists." });
+    }
+    res.status(500).send({ message: "Internal server error." });
   }
+});
+
+// --- Forgot Password Route (AUTH-1.2) ---
+// Stubs the logic by printing a reset token to the console (for MVP).
+router.post('/forgot-password', async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).send({ message: "Email is required" });
+
+    try {
+        const result = await query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
+        if (result.rows.length > 0) {
+            // Generate a fake reset token
+            const resetToken = uuidv4();
+            // In a real app, you would save this token to DB with expiration and email it.
+            // For MVP/Dev, we log it.
+            // TODO: Create unique link with expiration for real deployment later
+            console.log(`[AUTH] Password reset requested for ${email}. Token: ${resetToken}`);
+            console.log(`[AUTH] Link: http://localhost:5173/reset-password?token=${resetToken}`);
+        }
+        
+        // Always return success to prevent email enumeration attacks
+        res.send({ message: "If an account exists, a reset link has been sent." });
+    } catch (error) {
+        console.error("Forgot password error:", error);
+        res.status(500).send({ message: "Internal server error" });
+    }
 });
 
 export default router;

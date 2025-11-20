@@ -205,3 +205,50 @@ CREATE TABLE IF NOT EXISTS global_simulation_files (
   created_by UUID REFERENCES users(id),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- --- DAY 2 UPDATES: FILE HANDLING & VALIDATION (REVISED) ---
+
+-- 1. Create table for Project-level files
+CREATE TABLE IF NOT EXISTS project_files (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  file_name VARCHAR(255) NOT NULL,
+  gcs_path VARCHAR(1024) NOT NULL,
+  file_type VARCHAR(50) NOT NULL CHECK (file_type IN ('template', 'knowledgeBase', 'simulationMethod')),
+  file_hash VARCHAR(64), 
+  uploaded_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. Add hash/path columns to existing tables
+ALTER TABLE report_files 
+ADD COLUMN IF NOT EXISTS file_hash VARCHAR(64);
+
+ALTER TABLE global_simulation_files
+ADD COLUMN IF NOT EXISTS gcs_path VARCHAR(1024),
+ADD COLUMN IF NOT EXISTS file_hash VARCHAR(64);
+
+-- 3. (REVISED) Unique Project Name per Creator (Active Only)
+-- This allows duplicate names if the old one is archived.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_active_name_creator 
+ON projects (lower(name), creator_id) 
+WHERE is_archived = false;
+
+-- 4. (REVISED) Unique Report Title per Project (Active Only)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_active_title_project 
+ON reports (lower(title), project_id) 
+WHERE is_archived = false;
+
+-- 5. (OPTIONAL) Enforce File Uniqueness Scope
+-- This ensures a file (by hash) is unique per project, but allowed in others.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_files_hash
+ON project_files (project_id, file_hash);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_report_files_hash
+ON report_files (report_id, file_hash);
+
+-- DAY 3: Project Configuration & Validation
+
+-- 1. Add configuration flags to projects table
+ALTER TABLE projects 
+ADD COLUMN IF NOT EXISTS enable_analysis BOOLEAN DEFAULT true,
+ADD COLUMN IF NOT EXISTS enable_summary BOOLEAN DEFAULT true;
