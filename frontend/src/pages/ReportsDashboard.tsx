@@ -38,12 +38,13 @@ export default function ReportsDashboard() {
   const [archivedReports, setArchivedReports] = useState<Report[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
-
+  const [reportToDelete, setReportToDelete] = useState<string | null>(null);
   // State for modals
   const [modals, setModals] = useState({
     projectContext: false,
     archive: false,
     unarchive: false,
+    delete: false
   });
 
   // State to toggle between Active and Archived (U20)
@@ -201,6 +202,22 @@ export default function ReportsDashboard() {
     }
   };
 
+  // Function to handle delete reports
+  const handleDelete = async () => {
+    if (!reportToDelete) return;
+    setIsProcessing(true);
+    try {
+      await apiService.delete(`/reports/${reportToDelete}`);
+      addToast("Report permanently deleted.", 'success');
+      fetchArchivedReports(searchQuery);
+      closeModal('delete');
+    } catch (error: any) {
+      addToast(error.response?.data?.message || "Failed to delete.", 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   // Helper to manage modals
   const openModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: true }));
   const closeModal = (modal: keyof typeof modals) => {
@@ -211,6 +228,7 @@ export default function ReportsDashboard() {
     if (modal === 'unarchive') { // <-- ADD THIS BLOCK
       setReportToUnarchive(null);
     }
+    if (modal === 'delete') setReportToDelete(null);
   };
 
   // Handler for sorting
@@ -496,15 +514,28 @@ export default function ReportsDashboard() {
                       )}
                       <td className="p-3 py-4 text-right pr-6">
                         {showingArchived ? (
-                          <button 
-                            className="text-xs text-info/90 hover:text-info font-medium" 
-                            onClick={() => {
-                              setReportToUnarchive(report.id);
-                              openModal('unarchive');
-                            }}
-                          >
-                            Unarchive
-                          </button>
+                          <div className="flex justify-end gap-3">
+                            <button 
+                              className="text-xs text-info/90 hover:text-info font-medium" 
+                              onClick={() => {
+                                setReportToUnarchive(report.id);
+                                openModal('unarchive');
+                              }}
+                            >
+                              Unarchive
+                            </button>
+                            {role === 'Admin' && (
+                              <button
+                                className="text-xs text-error/80 hover:text-error"
+                                onClick={() => {
+                                  setReportToDelete(report.id);
+                                  openModal('delete');
+                                }}
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </div>
                         ) : (
                           <button
                             className={`text-xs font-medium ${report.canArchive ? 'text-error/90 hover:text-error' : 'text-text-muted/70 cursor-not-allowed'}`}
@@ -593,6 +624,34 @@ export default function ReportsDashboard() {
           </div>
         </div>
       </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {modals.delete && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
+            <h3 className="text-lg font-semibold text-error">Delete Permanently?</h3>
+            <p className="text-sm text-text-secondary mt-2">
+              This action cannot be undone. All data associated with this report will be lost.
+            </p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium"
+                onClick={() => closeModal('delete')}
+              >
+                Cancel
+              </button>
+              <LoadingButton
+                variant="danger"
+                onClick={handleDelete}
+                isLoading={isProcessing}
+                loadingText="Deleting..."
+              >
+                Delete
+              </LoadingButton>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

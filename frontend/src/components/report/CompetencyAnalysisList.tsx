@@ -11,6 +11,7 @@ interface CompetencyAnalysisListProps {
   onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
   data: CompetencyAnalysisData[];
   onChange: (newData: CompetencyAnalysisData[]) => void;
+  isLastPhase: boolean;
 }
 
 export default function CompetencyAnalysisList({
@@ -20,6 +21,7 @@ export default function CompetencyAnalysisList({
   onAskAI,
   data,
   onChange,
+  isLastPhase
 }: CompetencyAnalysisListProps) {
   
   // Filters
@@ -125,7 +127,7 @@ export default function CompetencyAnalysisList({
 
       {/* Footer Actions */}
       <div className="p-4 border-t border-border bg-bg-light flex justify-end">
-         {!isViewOnly && data.length > 0 && (
+         {!isViewOnly && data.length > 0 && !isLastPhase && (
              <LoadingButton
                 onClick={handleGenerateSummary}
                 isLoading={isGenerating}

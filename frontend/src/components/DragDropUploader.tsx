@@ -1,5 +1,6 @@
 // frontend/src/components/DragDropUploader.tsx
 import { useState, useRef, type DragEvent, type ChangeEvent } from 'react';
+import { useToastStore } from '../state/toastStore';
 
 interface DragDropUploaderProps {
   onUpload: (files: FileList) => void;
@@ -18,6 +19,7 @@ export default function DragDropUploader({
 }: DragDropUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const addToast = useToastStore((state) => state.addToast);
 
   const isFileAccepted = (file: File) => {
     if (!acceptedTypes) return true;
@@ -57,7 +59,7 @@ export default function DragDropUploader({
 
     // Feedback for rejected files
     if (rejectedFiles.length > 0) {
-      alert(`The following files were rejected (invalid format):\n- ${rejectedFiles.join('\n- ')}`);
+      addToast(`The following files were rejected (invalid format):\n- ${rejectedFiles.join('\n- ')}`, 'error');
     }
 
     // If valid files exist, create a new FileList and call onUpload

@@ -97,27 +97,79 @@ router.post('/register', async (req, res) => {
 // --- Forgot Password Route (AUTH-1.2) ---
 // Stubs the logic by printing a reset token to the console (for MVP).
 router.post('/forgot-password', async (req, res) => {
-    const { email } = req.body;
-    if (!email) return res.status(400).send({ message: "Email is required" });
+  const { email } = req.body;
+  if (!email) return res.status(400).send({ message: "Email is required" });
 
-    try {
-        const result = await query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
-        if (result.rows.length > 0) {
-            // Generate a fake reset token
-            const resetToken = uuidv4();
-            // In a real app, you would save this token to DB with expiration and email it.
-            // For MVP/Dev, we log it.
-            // TODO: Create unique link with expiration for real deployment later
-            console.log(`[AUTH] Password reset requested for ${email}. Token: ${resetToken}`);
-            console.log(`[AUTH] Link: http://localhost:5173/reset-password?token=${resetToken}`);
-        }
-        
-        // Always return success to prevent email enumeration attacks
-        res.send({ message: "If an account exists, a reset link has been sent." });
-    } catch (error) {
-        console.error("Forgot password error:", error);
-        res.status(500).send({ message: "Internal server error" });
+  try {
+    const result = await query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
+    if (result.rows.length > 0) {
+      const user = result.rows[0];
+      const resetToken = uuidv4();
+      // Expires in 1 hour
+      const expiry = new Date(Date.now() + 3600000); 
+
+      // Save token to DB
+      await query(
+        "UPDATE users SET reset_token = $1, reset_token_expiry = $2 WHERE id = $3",
+        [resetToken, expiry.toISOString(), user.id]
+      );
+
+      // MOCK EMAIL SENDING
+      console.log(`\n[AUTH] ---------------------------------------------------`);
+      console.log(`[AUTH] Password reset requested for: ${email}`);
+      console.log(`[AUTH] Link: http://localhost:5173/reset-password?token=${resetToken}`);
+      console.log(`[AUTH] ---------------------------------------------------\n`);
     }
+
+    res.send({ message: "If an account exists, a reset link has been sent." });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+// POST /api/auth/reset-password
+// TODO: Send real e-mail to user
+router.post('/reset-password', async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  if (!token || !newPassword) {
+    return res.status(400).send({ message: "Token and new password are required." });
+  }
+
+  try {
+    // 1. Find user with valid token
+    const result = await query(
+      `SELECT id FROM users 
+       WHERE reset_token = $1 
+         AND reset_token_expiry > NOW()`,
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).send({ message: "Invalid or expired reset token." });
+    }
+
+    const user = result.rows[0];
+
+    // 2. Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(newPassword, salt);
+
+    // 3. Update user and clear token
+    await query(
+      `UPDATE users 
+       SET password_hash = $1, reset_token = NULL, reset_token_expiry = NULL 
+       WHERE id = $2`,
+      [passwordHash, user.id]
+    );
+
+    res.send({ message: "Password updated successfully. Please log in." });
+
+  } catch (error) {
+    console.error("Reset password error:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
 });
 
 export default router;

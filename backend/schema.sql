@@ -252,3 +252,56 @@ ON report_files (report_id, file_hash);
 ALTER TABLE projects 
 ADD COLUMN IF NOT EXISTS enable_analysis BOOLEAN DEFAULT true,
 ADD COLUMN IF NOT EXISTS enable_summary BOOLEAN DEFAULT true;
+
+-- 1. Support for Password Reset (AUTH-1.2)
+ALTER TABLE users 
+ADD COLUMN IF NOT EXISTS reset_token VARCHAR(255),
+ADD COLUMN IF NOT EXISTS reset_token_expiry TIMESTAMPTZ;
+
+-- 2. Support for Simulation Method Descriptions (NP-4.5 / ADM-8.7)
+ALTER TABLE global_simulation_methods
+ADD COLUMN IF NOT EXISTS description TEXT;
+
+ALTER TABLE project_simulation_methods
+ADD COLUMN IF NOT EXISTS description TEXT;
+
+-- 3. Support for Simulation Method Tag in Files (Cleanup/Verify)
+-- (We already have simulation_method_tag in report_files, but we might need to formalize it later. 
+-- For now, the current schema is fine for Sprint 1's logic, but for ADM-8.7 we might need a 'tag' column if 'name' isn't enough. 
+-- Let's assume 'name' is the tag for now.)
+
+-- Link projects to specific global simulation files (ADM-8.7 / NP-4.5 Revised)
+CREATE TABLE IF NOT EXISTS projects_to_simulation_files (
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  file_id UUID REFERENCES global_simulation_files(id) ON DELETE CASCADE,
+  PRIMARY KEY (project_id, file_id)
+);
+
+-- (ADM-8.8 / ADM-8.9) System Settings Table
+-- Stores configuration as JSONB (e.g., key='ai_config', value={...})
+CREATE TABLE IF NOT EXISTS system_settings (
+  key VARCHAR(50) PRIMARY KEY,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_by UUID REFERENCES users(id)
+);
+
+-- (ADM-8.11) AI Models Management
+CREATE TABLE IF NOT EXISTS ai_models (
+  id VARCHAR(255) PRIMARY KEY, -- The OpenRouter Model ID (e.g., "openai/gpt-4o")
+  name VARCHAR(255), -- Friendly name (optional, or same as ID)
+  context_window INT DEFAULT 128000,
+  input_cost_per_m NUMERIC(10, 4) DEFAULT 0, -- Cost in USD per 1M tokens
+  output_cost_per_m NUMERIC(10, 4) DEFAULT 0,
+  supports_temperature BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  is_active BOOLEAN DEFAULT true
+);
+
+-- Seed initial data (so the app isn't empty)
+INSERT INTO ai_models (id, name, context_window, input_cost_per_m, output_cost_per_m)
+VALUES 
+  ('openrouter/openai/gpt-4o', 'GPT-4o', 128000, 5.00, 15.00),
+  ('openrouter/anthropic/claude-3-opus', 'Claude 3 Opus', 200000, 15.00, 75.00),
+  ('openrouter/google/gemini-pro-1.5', 'Gemini 1.5 Pro', 1000000, 3.50, 10.50)
+ON CONFLICT DO NOTHING;

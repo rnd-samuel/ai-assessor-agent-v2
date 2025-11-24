@@ -1,12 +1,13 @@
 // backend/src/routes/reports.routes.ts
 import { Router, Request } from 'express';
-import { authenticateToken } from '../middleware/auth.middleware';
+import { authenticateToken, authorizeRole } from '../middleware/auth.middleware';
 import { query } from '../services/db';
 import { aiGenerationQueue } from '../services/queue';
 import { uploadToGCS } from '../services/storage';
 import { generateReportDocx } from '../services/document-service';
 import multer from 'multer';
 import crypto from 'crypto';
+const officeParser = require('officeparser');
 
 // Configure multer to store files in memory as buffers
 const storage = multer.memoryStorage();
@@ -25,6 +26,33 @@ const router = Router();
 const calculateHash = (buffer: Buffer): string => {
   return crypto.createHash('md5').update(buffer).digest('hex');
 };
+
+/**
+ * Helper to extract text based on mime type using officeparser
+ */
+async function extractTextFromFile(buffer: Buffer, mimeType: string): Promise<string> {
+  try {
+    console.log(`[Text Extraction] Processing file type: ${mimeType}`);
+
+    if (mimeType === 'text/plain') {
+      return buffer.toString('utf-8').replace(/\0/g, '');
+    }
+
+    // officeparser handles PDF, DOCX, PPTX, ODT, etc.
+    // We pass the buffer directly.
+    const text = await officeParser.parseOfficeAsync(buffer);
+    
+    if (typeof text !== 'string') {
+      throw new Error('Parsed content is not a string');
+    }
+
+    return text;
+
+  } catch (error) {
+    console.error(`[Text Extraction] Error parsing file type ${mimeType}:`, error);
+    throw new Error("Failed to extract text from file.");
+  }
+}
 
 /**
  * (FR-AI-001) Create a new Report
@@ -99,7 +127,7 @@ router.post('/:id/upload', authenticateToken, upload.single('file'), async (req:
     // 3. Save DB
     // NOTE: We still save 'file_content' as text for now because the AI service (Phase 1) currently reads it from DB.
     // In a future sprint (RAG), we will remove 'file_content' and read from GCS/Vector DB.
-    const fileContent = file.buffer.toString('utf-8').replace(/\0/g, '');
+    const fileContent = await extractTextFromFile(file.buffer, file.mimetype);
 
     await query(
       `INSERT INTO report_files (report_id, file_name, gcs_path, simulation_method_tag, file_content, file_hash)
@@ -209,6 +237,36 @@ router.put('/:id/unarchive', authenticateToken, async (req: AuthenticatedRequest
   }
 });
 
+/**
+ * (RD-5.6) Permanently Delete a Report
+ * Restriction: Admin Only, and Report must be Archived.
+ */
+router.delete('/:id', authenticateToken, authorizeRole('Admin'), async (req: AuthenticatedRequest, res) => {
+  const { id } = req.params;
+
+  try {
+    // 1. Safety Check
+    const check = await query('SELECT is_archived FROM reports WHERE id = $1', [id]);
+    
+    if (check.rows.length === 0) {
+      return res.status(404).send({ message: "Report not found." });
+    }
+    
+    if (!check.rows[0].is_archived) {
+      return res.status(400).send({ message: "Cannot delete an active report. Archive it first." });
+    }
+
+    // 2. Perform Delete
+    await query('DELETE FROM reports WHERE id = $1', [id]);
+    
+    res.send({ message: "Report permanently deleted." });
+
+  } catch (error) {
+    console.error("Error deleting report:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
 // (RP-7.1, RP-7.4, RP-7.12, RP-7.14) Get ALL data for a report
 router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const { id: reportId } = req.params;
@@ -220,6 +278,7 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
     const reportResult = await query(
       `SELECT 
          r.title, r.status, r.creator_id, r.project_id, r.target_levels,
+         r.specific_context, r.is_archived,
          p.creator_id as project_creator_id, p.dictionary_id,
          p.enable_analysis, p.enable_summary
        FROM reports r
@@ -281,6 +340,8 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       status: report.status,
       projectId: report.project_id,
       targetLevels: report.target_levels,
+      specificContext: report.specific_context,
+      isArchived: report.is_archived,
       currentPhase,
       targetPhase,
       creatorId: report.creator_id,
@@ -542,20 +603,39 @@ router.post('/:id/refine', authenticateToken, async (req: AuthenticatedRequest, 
 // (RP-7.17) Save Report Content (Analysis & Summary)
 router.put('/:id/content', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const { id: reportId } = req.params;
-  const { competencyAnalysis, executiveSummary } = req.body;
+  const { title, competencyAnalysis, executiveSummary } = req.body;
 
   const client = await query('BEGIN');
 
   try {
+    // Update Report Title (if provided)
+    if (title) {
+      await query('UPDATE reports SET title = $1 WHERE id = $2', [title, reportId]);
+    }
+
     // Save Analysis
     if (competencyAnalysis && Array.isArray(competencyAnalysis)) {
       for (const item of competencyAnalysis) {
         if (item.id) {
+          const levelAchieved = item.levelAchieved || item.level_achieved;
+          const explanation = item.explanation;
+          const devRecs = item.developmentRecommendations || item.development_recommendations;
+          
+          const kbData = item.keyBehaviors || item.key_behaviors_status || [];
+          const kbJson = JSON.stringify(kbData);
+
           await query(
             `UPDATE competency_analysis 
              SET level_achieved = $1, explanation = $2, development_recommendations = $3, key_behaviors_status = $4, updated_at = NOW()
              WHERE id = $5 AND report_id = $6`,
-            [item.level_achieved, item.explanation, item.development_recommendations, JSON.stringify(item.key_behaviors_status), item.id, reportId]
+            [
+                levelAchieved, // $1
+                explanation,   // $2
+                devRecs,       // $3
+                kbJson,        // $4
+                item.id,       // $5
+                reportId       // $6
+            ]
           );
         }
       }
@@ -564,6 +644,13 @@ router.put('/:id/content', authenticateToken, async (req: AuthenticatedRequest, 
     // Save Summary
     if (executiveSummary) {
       const check = await query('SELECT id FROM executive_summary WHERE report_id = $1', [reportId]);
+
+      // CHECK: Does the incoming data actually have content?
+      const hasContent = 
+        (executiveSummary.strengths && executiveSummary.strengths.trim().length > 0) || 
+        (executiveSummary.areas_for_improvement && executiveSummary.areas_for_improvement.trim().length > 0) || 
+        (executiveSummary.recommendations && executiveSummary.recommendations.trim().length > 0);
+
       if (check.rows.length > 0) {
         await query(
           `UPDATE executive_summary 
@@ -571,7 +658,7 @@ router.put('/:id/content', authenticateToken, async (req: AuthenticatedRequest, 
            WHERE report_id = $4`,
           [executiveSummary.strengths, executiveSummary.areas_for_improvement, executiveSummary.recommendations, reportId]
         );
-      } else {
+      } else if (hasContent) {
          await query(
           `INSERT INTO executive_summary (report_id, strengths, areas_for_improvement, recommendations)
            VALUES ($1, $2, $3, $4)`,

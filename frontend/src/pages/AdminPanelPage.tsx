@@ -14,8 +14,15 @@ import {
 } from 'chart.js';
 import flatpickr from 'flatpickr';
 import 'flatpickr/dist/flatpickr.min.css'; // Import the styles
-import Sidebar from '../components/Sidebar'; // <-- *** IMPORT THE SIDEBAR ***
+import { useBlocker } from 'react-router-dom';
 import apiService from '../services/apiService';
+import DictionaryEditor from '../components/DictionaryEditor';
+import DictionaryContentDisplay, { type DictionaryContent } from '../components/DictionaryContentDisplay';
+import DragDropUploader from '../components/DragDropUploader';
+import UnsavedChangesModal from '../components/UnsavedChangesModal';
+import LoadingButton from '../components/LoadingButton';
+import { useToastStore } from '../state/toastStore';
+import SearchableSelect from '../components/SearchableSelect';
 
 // Register Chart.js components
 Chart.register(
@@ -36,18 +43,19 @@ Chart.defaults.color = '#4b5563'; // text-secondary
 
 type AdminTab = 'usage' | 'queue' | 'logging' | 'knowledge' | 'ai_settings' | 'user_management';
 
-// Helper component for file uploader
-const FileUploader = ({ types }: { types: string }) => (
-  <div className="w-full border-2 border-dashed border-border rounded-lg bg-bg-medium p-8 text-center cursor-pointer hover:border-primary">
-    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-text-muted mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-    <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
-    <p className="text-xs text-text-muted mt-1">{types}</p>
-  </div>
-);
+// Helper to check if model supports temperature
+const supportsTemperature = (model: string) => {
+  // Example logic: OpenAI 'o1' models don't support temperature. 
+  // For now, we assume all do, but this function is ready for logic.
+  if (model.includes('o1-preview') || model.includes('o1-mini')) return false;
+  return true;
+};
 
 export default function AdminPanelPage() {
   // (A2) State for active tab
   const [activeTab, setActiveTab] = useState<AdminTab>('usage');
+
+  const addToast = useToastStore((state) => state.addToast);
   
   // State for all modals
   const [modals, setModals] = useState({
@@ -62,11 +70,6 @@ export default function AdminPanelPage() {
     promptHistory: false,
     selectSimMethod: false,
   });
-
-  // (A15-A21) State for AI settings
-  const [mainLLMTemp, setMainLLMTemp] = useState(0.7);
-  const [backupLLMTemp, setBackupLLMTemp] = useState(0.7);
-  const [askAiEnabled, setAskAiEnabled] = useState(true);
   
   // (A5) State for Model Filter
   const [modelFilterOpen, setModelFilterOpen] = useState(false);
@@ -75,15 +78,30 @@ export default function AdminPanelPage() {
   const [queueStats, setQueueStats] = useState({ active: 0, completed: 0, failed: 0, waiting: 0 });
 
   // State for Dictionaries
-  const [dictionaries, setDictionaries] = useState<{id: string, name: string, created_at: string}[]>([]);
+  const [dictionaries, setDictionaries] = useState<{
+    id: string;
+    name: string; 
+    created_at: string;
+    is_in_use: boolean;
+  }[]>([]);
   const [isUploadingDict, setIsUploadingDict] = useState(false);
+  const [editingDictionary, setEditingDictionary] = useState<{
+    id: string; 
+    name: string;
+    content: DictionaryContent;
+    is_in_use: boolean;
+  } | null>(null);
+  const [isSavingDict, setIsSavingDict] = useState(false);
 
   // State for Simulation Methods
-  const [simMethods, setSimMethods] = useState<{id: string, name: string}[]>([]);
-  const [newMethodName, setNewMethodName] = useState('');
+  const [simMethods, setSimMethods] = useState<{id: string, name: string, description: string}[]>([]);
+  const [methodForm, setMethodForm] = useState({ id: '', name: '', description: '' });
+  const [isEditingMethod, setIsEditingMethod] = useState(false);
+  const [isSavingMethod, setIsSavingMethod] = useState(false);
 
   // State for Simulation Files
   const [simFiles, setSimFiles] = useState<{id: string, file_name: string, method_name: string}[]>([]);
+  const [isUploadingSimFile, setIsUploadingSimFile] = useState(false);
 
   // State for Users
   const [users, setUsers] = useState<{id: string, name: string, email: string, role: string}[]>([]);
@@ -95,6 +113,29 @@ export default function AdminPanelPage() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [targetMethodId, setTargetMethodId] = useState('');
 
+  const [isDirty, setIsDirty] = useState(false);
+
+  const [isSavingUser, setIsSavingUser] = useState(false);
+  
+  // AI Config State
+  const [aiConfig, setAiConfig] = useState({
+    mainLLM: 'openrouter/google/gemini-2.5-pro-preview',
+    backupLLM: 'openrouter/openai/gpt-5.1',
+    mainTemp: 0.5,
+    backupTemp: 0.5,
+    askAiEnabled: true,
+    askAiLLM: 'openrouter/google/gemini-2.5-flash',
+  });
+
+  // Default Prompts State
+  const [defaultPrompts, setDefaultPrompts] = useState({
+    persona: '',
+    evidence: '',
+    analysis: '',
+    summary: '',
+    askAiSystem: '' // Moved here to save with other prompts
+  });
+
   // Refs for charts and datepicker
   const apiRequestsChartRef = useRef<HTMLCanvasElement>(null);
   const tokenUsageChartRef = useRef<HTMLCanvasElement>(null);
@@ -105,6 +146,30 @@ export default function AdminPanelPage() {
   // Helper to manage modals
   const openModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: true }));
   const closeModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: false }));
+
+  const [showUnsavedModal, setShowUnsavedModal] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+
+  // State for AI Models Management
+  interface AiModel {
+    id: string;
+    context_window: number;
+    input_cost_per_m: number;
+    output_cost_per_m: number;
+  }
+  const [aiModelsList, setAiModelsList] = useState<AiModel[]>([]);
+
+  // Form for new model
+  const [newModelForm, setNewModelForm] = useState({
+    id: '', 
+    context_window: 128000, 
+    input_cost: 0, 
+    output_cost: 0
+  });
+
+  // Sort state for Models Table
+  const [modelSortKey, setModelSortKey] = useState<keyof AiModel>('id');
+  const [modelSortOrder, setModelSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // (A3) Effect to initialize dummy charts
   useEffect(() => {
@@ -200,8 +265,16 @@ export default function AdminPanelPage() {
     }
   }, [activeTab]);
 
-  const handleDictionaryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleKnowledgeUpload = (files: FileList) => {
+    if (files.length > 0) {
+      // TODO: Implement backend endpoint for General Knowledge (ADM-8.5)
+      console.log("Uploading General Knowledge:", files);
+      addToast("General Knowledge upload coming soon (Backend pending).", 'info');
+    }
+  };
+
+  const handleDictionaryUpload = async (files: FileList) => {
+    const file = files[0];
     if (!file) return;
 
     const reader = new FileReader();
@@ -218,17 +291,60 @@ export default function AdminPanelPage() {
           content: jsonContent
         });
 
-        alert('Dictionary uploaded successfully!');
+        addToast('Dictionary uploaded successfully!', 'success')
         fetchDictionaries();
       } catch (error) {
         console.error("Upload failed:", error);
-        alert("Invalid JSON file or upload failed.");
+        addToast('Invalid JSON file or upload failed.', 'error')
       } finally {
         setIsUploadingDict(false);
       }
     };
     reader.readAsText(file);
   }
+
+  const handleEditDictionary = async (dict: {id: string, name: string, is_in_use: boolean}) => {
+    try {
+      // Fetch full content
+      const response = await apiService.get(`/projects/dictionary/${dict.id}/content`);
+      
+      setEditingDictionary({
+        id: dict.id,
+        name: dict.name,
+        content: response.data,
+        is_in_use: dict.is_in_use,
+      });
+      openModal('editDictionary');
+    } catch (error) {
+      console.error(error);
+      addToast('Failed to load dictionary details.', 'error');
+    }
+  };
+
+  const handleSaveDictionary = async () => {
+    if (!editingDictionary) return;
+    
+    try {
+      setIsSavingDict(true);
+      // Validate JSON
+      const parsedContent = editingDictionary.content;
+      
+      await apiService.put(`/admin/dictionaries/${editingDictionary.id}`, {
+        name: editingDictionary.name,
+        content: parsedContent
+      });
+      
+      addToast('Dictionary updated.', 'success');
+      setIsDirty(false);
+      closeModal('editDictionary');
+      fetchDictionaries();
+    } catch (error) {
+      addToast('Invalid JSON format or Server Error.', 'error');
+      console.error(error);
+    } finally {
+      setIsSavingDict(false);
+    }
+  };
 
   const handleDeleteDictionary = async (id: string) => {
     if(!window.confirm("Are you sure? This cannot be undone.")) return;
@@ -237,7 +353,7 @@ export default function AdminPanelPage() {
       await apiService.delete(`/admin/dictionaries/${id}`);
       fetchDictionaries();
     } catch (error: any) {
-      alert(error.response?.data?.message || "Failed to delete dictionary.");
+      addToast(error.response?.data?.message || 'Failed to delete dictionary.', 'error');
     }
   };
 
@@ -251,15 +367,35 @@ export default function AdminPanelPage() {
   };
 
   const handleCreateMethod = async () => {
-    if (!newMethodName.trim()) return;
+    if (!methodForm.name.trim()) {
+      addToast("Method name is required", 'error');
+      return;
+    }
+    setIsSavingMethod(true);
     try {
-      await apiService.post('/admin/simulation-methods', { name: newMethodName });
-      setNewMethodName('');
+      if (isEditingMethod) {
+        await apiService.put(`/admin/simulation-methods/${methodForm.id}`, {
+            name: methodForm.name,
+            description: methodForm.description
+        });
+        addToast("Method updated!", 'success');
+      } else {
+        await apiService.post('/admin/simulation-methods', { 
+          name: methodForm.name,
+          description: methodForm.description
+        });
+        addToast("Method created!", 'success');
+      }
+
+      setIsDirty(false);
       closeModal('addSimMethod');
+      setMethodForm({ id: '', name: '', description: '' });
+      setIsEditingMethod(false);
       fetchSimMethods();
-      alert("Method created!");
     } catch (error: any) {
-      alert(error.response?.data?.message || "Failed to create method.");
+      addToast(error.response?.data?.message || "Failed to create simulation method.", 'error');
+    } finally {
+      setIsSavingMethod(false);
     }
   };
 
@@ -269,7 +405,7 @@ export default function AdminPanelPage() {
       await apiService.delete(`/admin/simulation-methods/${id}`);
       fetchSimMethods();
     } catch (error: any) {
-      alert (error.response?.data?.message || "Failed to delete method.");
+      addToast(error.response?.data?.message || 'Failed to delete method.', 'error');
     }
   };
 
@@ -282,15 +418,17 @@ export default function AdminPanelPage() {
     }
   };
 
-  const handleSimFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setPendingFile(e.target.files[0]);
+  const handleDragDropUpload = (files: FileList) => {
+    if (files && files.length > 0) {
+      setPendingFile(files[0]);
       openModal('selectSimMethod');
     }
   };
 
   const confirmSimFileUpload = async () => {
     if (!pendingFile || !targetMethodId) return;
+
+    setIsUploadingSimFile(true);
 
     const formData = new FormData();
     formData.append('file', pendingFile);
@@ -300,14 +438,16 @@ export default function AdminPanelPage() {
       await apiService.post('/admin/simulation-files', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      alert("File uploaded successfully!");
+      addToast('File uploaded successfully!', 'success');
       closeModal('selectSimMethod');
       setPendingFile(null);
       setTargetMethodId('');
       fetchSimFiles();
     } catch (error) {
       console.error("Upload failed", error);
-      alert("Failed to upload file.");
+      addToast('Failed to upload file.', 'error');
+    } finally {
+      setIsUploadingSimFile(false);
     }
   };
 
@@ -315,6 +455,113 @@ export default function AdminPanelPage() {
     if(!confirm("Delete this file?")) return;
     await apiService.delete(`/admin/simulation-files/${id}`);
     fetchSimFiles();
+  };
+
+  useEffect(() => {
+    if (activeTab === 'ai_settings') {
+      fetchAiModels();
+      const fetchSettings = async () => {
+        try {
+          const [configRes, promptsRes] = await Promise.all([
+            apiService.get('/admin/settings/ai_config'),
+            apiService.get('/admin/settings/default_prompts')
+          ]);
+          
+          // Merge with defaults to avoid null issues
+          if (configRes.data && Object.keys(configRes.data).length > 0) {
+             setAiConfig(prev => ({ ...prev, ...configRes.data }));
+          }
+          if (promptsRes.data && Object.keys(promptsRes.data).length > 0) {
+             setDefaultPrompts(prev => ({ ...prev, ...promptsRes.data }));
+          }
+        } catch (error) {
+          console.error("Failed to load settings", error);
+          addToast("Failed to load AI settings.", 'error');
+        }
+      };
+      fetchSettings();
+    }
+  }, [activeTab]);
+
+  const handleSaveAllSettings = async () => {
+    setIsSavingMethod(true);
+    try {
+      // Save both concurrently
+      await Promise.all([
+        apiService.put('/admin/settings/ai_config', aiConfig),
+        apiService.put('/admin/settings/default_prompts', defaultPrompts)
+      ]);
+      
+      addToast("Settings and prompts saved successfully.", 'success');
+      setIsDirty(false);
+    } catch (error) {
+      console.error("Save failed:", error);
+      addToast("Failed to save settings. Please try again.", 'error');
+    } finally {
+      setIsSavingMethod(false);
+    }
+  };
+
+  const fetchAiModels = async () => {
+    try {
+      const response = await apiService.get('/admin/ai-models');
+      setAiModelsList(response.data);
+    } catch (error) {
+      console.error("Failed to fetch AI models", error);
+    }
+  };
+
+  const handleAddModel = async () => {
+    if (!newModelForm.id) {
+        addToast("Model ID is required", 'error');
+        return;
+    }
+    setIsSavingMethod(true);
+    try {
+        await apiService.post('/admin/ai-models', newModelForm);
+        addToast("Model added successfully.", 'success');
+        closeModal('addModel' as any); // Cast if types strict, or add 'addModel' to modals state definition
+        setNewModelForm({ id: '', context_window: 128000, input_cost: 0, output_cost: 0 });
+        fetchAiModels();
+    } catch (error: any) {
+        addToast(error.response?.data?.message || "Failed to add model.", 'error');
+    } finally {
+        setIsSavingMethod(false);
+    }
+  };
+
+  const handleDeleteModel = async (id: string) => {
+    if (!confirm(`Delete model ${id}? This might break projects using it.`)) return;
+    try {
+        // encodeURIComponent is needed for IDs like "openai/gpt-4"
+        await apiService.delete(`/admin/ai-models/${encodeURIComponent(id)}`);
+        addToast("Model deleted.", 'success');
+        fetchAiModels();
+    } catch (error) {
+        addToast("Failed to delete model.", 'error');
+    }
+  };
+
+  // Sorting Logic
+  const sortedModels = [...aiModelsList].sort((a, b) => {
+    let valA = a[modelSortKey];
+    let valB = b[modelSortKey];
+    // Handle strings vs numbers
+    if (typeof valA === 'string') valA = valA.toLowerCase();
+    if (typeof valB === 'string') valB = valB.toLowerCase();
+    
+    if (valA < valB) return modelSortOrder === 'asc' ? -1 : 1;
+    if (valA > valB) return modelSortOrder === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const handleModelSort = (key: keyof AiModel) => {
+     if (modelSortKey === key) {
+        setModelSortOrder(modelSortOrder === 'asc' ? 'desc' : 'asc');
+     } else {
+        setModelSortKey(key);
+        setModelSortOrder('asc');
+     }
   };
 
   const fetchUsers = async () => {
@@ -334,34 +581,42 @@ export default function AdminPanelPage() {
 
   const handleAddUser = async () => {
     if (!newUser.email || !newUser.password || !newUser.name) {
-      alert("Please fill all fields.");
+      addToast('Please fill all fields.', 'info');
       return;
     }
+    setIsSavingUser(true);
     try {
       // Using the public register route is fine for now, or you could make a protected admin one.
       await apiService.post('/auth/register', newUser);
-      alert("User added successfully!");
+      addToast('User added successfully!', 'success');
+      setIsDirty(false);
       closeModal('addUser');
       setNewUser({ name: '', email: '', password: '', role: 'User' }); // Reset form
       fetchUsers();
     } catch (error: any) {
-      alert(error.response?.data?.message || "Failed to create user.");
+      addToast(error.response?.data?.message || 'Failed to create user.', 'error');
+    } finally {
+      setIsSavingUser(false);
     }
   };
 
   const handleEditUser = async () => {
     if (!editingUserId) return;
 
+    setIsSavingUser(true);
+
     try {
       await apiService.put(`/admin/users/${editingUserId}`, newUser);
-      alert("User updated successfully!");
-
+      addToast('User updated successfully!', 'success');
+      setIsDirty(false);
       closeModal('editUser');
       setEditingUserId(null);
       setNewUser({ name: '', email: '', password: '', role: 'User' }); // Reset form
       fetchUsers(); // Refresh list
     } catch (error: any) {
-      alert(error.response?.data?.message || "Failed to update user.");
+      addToast(error.response?.data?.message || 'Failed to update user.', 'error');
+    } finally {
+      setIsSavingUser(false);
     }
   };
 
@@ -371,16 +626,54 @@ export default function AdminPanelPage() {
       await apiService.delete(`/admin/users/${id}`);
       fetchUsers();
     } catch (error: any) {
-      alert(error.response?.data?.message || "Failed to delete user.");
+      addToast(error.response?.data?.message || 'Failed to delete user.', 'error');
     }
   };
+
+  // Helper: Check for unsaved changes before performing an action
+  const checkUnsaved = (action: () => void) => {
+    if (isDirty) {
+      setPendingAction(() => action); // Store the action to run later
+      setShowUnsavedModal(true);      // Show our manual modal
+    } else {
+      action(); // Run immediately if clean
+    }
+  };
+
+  // Helper: Handle "Stay" (Cancel navigation)
+  const handleStay = () => {
+    setShowUnsavedModal(false);
+    setPendingAction(null);
+  };
+
+  // Helper: Handle "Leave" (Confirm data loss)
+  const handleLeave = () => {
+    setIsDirty(false); // Clear dirty flag
+    setShowUnsavedModal(false);
+    if (pendingAction) {
+      pendingAction(); // Run the stored action (e.g., close modal)
+      setPendingAction(null);
+    }
+  };
+
+  // Wrapper for Tab Switching
+  const handleTabChange = (tab: AdminTab) => {
+    checkUnsaved(() => setActiveTab(tab));
+  };
+
+  // Wrapper for Modal Closing
+  const handleCloseModal = (modal: keyof typeof modals) => {
+    checkUnsaved(() => closeModal(modal));
+  };
+
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      isDirty && currentLocation.pathname !== nextLocation.pathname
+  );
 
   return (
     // This is the root layout
     <div className="flex h-screen bg-bg-light">
-      
-      {/* 1. Sidebar Component */}
-      <Sidebar />
 
       {/* This is the main content area for the admin panel */}
       <div className="flex-1 flex flex-col h-screen overflow-hidden">
@@ -393,12 +686,12 @@ export default function AdminPanelPage() {
         {/* Tab Navigation (A2) */}
         <div className="flex-shrink-0 border-b border-border bg-bg-light">
           <nav className="flex -mb-px px-6">
-            <button onClick={() => setActiveTab('usage')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'usage' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Usage Dashboard</button>
-            <button onClick={() => setActiveTab('queue')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'queue' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Queue Dashboard</button>
-            <button onClick={() => setActiveTab('logging')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'logging' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Comprehensive Logging</button>
-            <button onClick={() => setActiveTab('knowledge')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'knowledge' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Knowledge Base</button>
-            <button onClick={() => setActiveTab('ai_settings')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'ai_settings' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>AI Settings</button>
-            <button onClick={() => setActiveTab('user_management')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'user_management' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>User Management</button>
+            <button onClick={() => handleTabChange('usage')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'usage' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Usage Dashboard</button>
+            <button onClick={() => handleTabChange('queue')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'queue' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Queue Dashboard</button>
+            <button onClick={() => handleTabChange('logging')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'logging' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Comprehensive Logging</button>
+            <button onClick={() => handleTabChange('knowledge')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'knowledge' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>Knowledge Base</button>
+            <button onClick={() => handleTabChange('ai_settings')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'ai_settings' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>AI Settings</button>
+            <button onClick={() => handleTabChange('user_management')} className={`whitespace-nowrap py-3 px-4 text-sm font-medium border-b-2 ${activeTab === 'user_management' ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:border-border'}`}>User Management</button>
           </nav>
         </div>
 
@@ -555,7 +848,12 @@ export default function AdminPanelPage() {
               <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border space-y-4">
                 <h4 className="text-md font-semibold text-text-primary">General Knowledge Files</h4>
                 <p className="text-sm text-text-muted">Upload general documents (.pdf, .docx, .txt) to be available to all AI requests.</p>
-                <FileUploader types="PDF, DOCX, or TXT" />
+                <DragDropUploader
+                  onUpload={handleKnowledgeUpload}
+                  acceptedTypes=".pdf,.docx,.txt"
+                  multiple={true}
+                  subLabel="PDF, DOCX, or TXT"
+                />
                 <div>
                   <h5 className="text-sm font-medium text-text-primary mb-2">Uploaded Files:</h5>
                   <ul className="space-y-2">
@@ -567,21 +865,15 @@ export default function AdminPanelPage() {
                 </div>
               </div>
               {/* Competency Dictionaries (A13) */}
-              <div
-                className="w-full border-2 border-dashed border-border rounded-lg bg-bg-medium p-8 text-center cursor-pointer hover:border-primary"
-                onClick={() => document.getElementById('dict-upload')?.click()}
-              >
-                <input 
-                  type="file"
-                  id="dict-upload"
-                  className="hidden"
-                  accept=".json"
-                  onChange={handleDictionaryUpload}
-                  disabled={isUploadingDict}
-                />
-                <p className="text-sm font-semibold text-text-secondary">
-                  {isUploadingDict ? "Uploading..." : "Click to upload JSON dictionary"}
-                </p>
+              <div>
+                <h4 className="text-md font-semibold text-text-primary mb-2">Competency Dictionaries</h4>
+                <DragDropUploader
+                    onUpload={handleDictionaryUpload}
+                    acceptedTypes=".json"
+                    multiple={false}
+                    subLabel="JSON File"
+                    label={isUploadingDict ? "Uploading..." : "Click to upload or drag and drop"}
+                 />
               </div>
 
               <div>
@@ -597,13 +889,37 @@ export default function AdminPanelPage() {
                           <span className="text-xs text-text-muted ml-2">
                             (Added: {new Date(dict.created_at).toLocaleDateString()})
                           </span>
+                          {dict.is_in_use && (
+                            <span className="ml-2 px-1.5 py-0.5 text-[10px] font-semibold bg-info/10 text-info rounded border border-info/20">
+                              Active
+                            </span>
+                          )}
                         </div>
-                        <button
-                          onClick={() => handleDeleteDictionary(dict.id)}
-                          className="text-xs text-error/80 hover:text-error font-medium px-2 py-1"
-                        >
-                          Delete
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleEditDictionary(dict)}
+                            title={dict.is_in_use ? "View Dictionary (Read-Only)" : "Edit Dictionary"}
+                            className={`text-xs font-medium px-2 py-1 rounded transition-colors ${
+                              dict.is_in_use
+                                ? 'text-text-secondary hover:bg-bg-medium bg-bg-medium/50'
+                                : 'text-primary hover:text-primary-hover bg-primary/5 hover:bg-primary/10'
+                            }`}
+                          >
+                            {dict.is_in_use ? 'View' : 'Edit'}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteDictionary(dict.id)}
+                            disabled={dict.is_in_use}
+                            title={dict.is_in_use ? "Cannot delete: Used by active projects" : "Delete Dictionary"}
+                            className={`text-xs font-medium px-2 py-1 rounded transition-colors ${
+                              dict.is_in_use 
+                                ? 'text-text-muted opacity-50 cursor-not-allowed' 
+                                : 'text-error/80 hover:text-error'
+                            }`}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </li>
                     ))
                   )}
@@ -615,19 +931,12 @@ export default function AdminPanelPage() {
                 <p className="text-sm text-text-muted">Upload data files (.pdf, .docx, .txt) and link them to a method.</p>
                 
                 {/* File Uploader */}
-                <div
-                  className="w-full border-2 border-dashed border-border rounded-lg bg-bg-medium p-8 text-center cursor-pointer hover:border-primary"
-                  onClick={() => document.getElementById('sim-file-upload')?.click()}
-                >
-                  <input 
-                    type="file"
-                    id="sim-file-upload"
-                    className="hidden"
-                    accept=".pdf,.docx,.txt"
-                    onChange={handleSimFileSelect}
+                  <DragDropUploader
+                    onUpload={handleDragDropUpload}
+                    acceptedTypes=".pdf,.docx,.txt"
+                    multiple={false}
+                    subLabel="PDF, DOCX, or TXT"
                   />
-                  <p className="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
-                </div>
                   
                 <div>
                   <h5 className="text-sm font-medium text-text-primary mb-2">Uploaded Method Data:</h5>
@@ -641,7 +950,11 @@ export default function AdminPanelPage() {
                   </ul>
                 </div>
                 <button
-                  onClick={() => openModal('addSimMethod')}
+                  onClick={() => {
+                    setMethodForm({ id: '', name: '', description: '' });
+                    setIsEditingMethod(false);
+                    openModal('addSimMethod')
+                  }}
                   className="text-sm text-primary hover:underline font-medium"
                 >
                   + Add New Simulation Method
@@ -651,14 +964,29 @@ export default function AdminPanelPage() {
                   <h5 className="text-sm font-medium text-text-primary mb-2">Available Methods:</h5>
                   <ul className="space-y-2">
                     {simMethods.map(method => (
-                      <li key={method.id} className="flex justify-between items-center text-sm p-3 border border-border rounded-md bg-bg-medium/30">
-                        <span className="text-text-primary">{method.name}</span>
-                        <button
-                          onClick={() => handleDeleteMethod(method.id)}
-                          className="text-xs text-error/80 hover:text-error"
-                        >
-                          Delete
-                        </button>
+                      <li key={method.id} className="flex justify-between items-start text-sm p-3 border border-border rounded-md bg-bg-medium/30">
+                        <div>
+                          <p className="font-medium text-text-primary">{method.name}</p>
+                          {method.description && <p className="text-xs text-text-muted mt-1">{method.description}</p>}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setMethodForm({ id: method.id, name: method.name, description: method.description || '' });
+                              setIsEditingMethod(true);
+                              openModal('addSimMethod');
+                            }}
+                            className="text-xs text-primary hover:underline"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteMethod(method.id)}
+                            className="text-xs text-error/80 hover:text-error"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -668,101 +996,246 @@ export default function AdminPanelPage() {
           )}
 
           {/* AI Settings Tab (A15-A21) */}
+          {/* AI Settings Tab (A15-A21) */}
           {activeTab === 'ai_settings' && (
             <div className="space-y-8">
-              <h3 className="text-lg font-semibold text-text-primary">AI Model & Prompt Settings</h3>
-              {/* LLM Selection (A16, A17) */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
-                  <label htmlFor="main-llm" className="block text-md font-semibold text-text-primary mb-2">Main LLM</label>
-                  <select id="main-llm" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
-                    <option>openrouter/openai/gpt-4o</option>
-                    <option>openrouter/anthropic/claude-3-opus</option>
-                  </select>
+              
+              {/* 1. CONFIGURATION SECTION */}
+              <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border space-y-6">
+                <div className="flex justify-between items-center border-b border-border pb-4">
+                  <h3 className="text-lg font-semibold text-text-primary">Model Configuration</h3>
+                  <LoadingButton 
+                    onClick={handleSaveAllSettings} 
+                    isLoading={isSavingMethod}
+                    loadingText="Saving..."
+                  >
+                    Save All Settings
+                  </LoadingButton>
                 </div>
-                <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
-                  <label htmlFor="backup-llm" className="block text-md font-semibold text-text-primary mb-2">Backup LLM</label>
-                  <select id="backup-llm" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
-                    <option>openrouter/anthropic/claude-3-opus</option>
-                  </select>
+
+                {/* Main LLM */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-text-secondary mb-1">Main LLM</label>
+                    <SearchableSelect
+                      options={aiModelsList.map(m => ({ value: m.id, label: m.id }))}
+                      value={aiConfig.mainLLM}
+                      onChange={(val) => {
+                        setAiConfig({ ...aiConfig, mainLLM: val });
+                        setIsDirty(true);
+                      }}
+                    />
+                  </div>
+                  <div>
+                     <label htmlFor="main-temp" className={`block text-sm font-medium mb-1 ${supportsTemperature(aiConfig.mainLLM) ? 'text-text-secondary' : 'text-text-muted'}`}>
+                        Temperature {supportsTemperature(aiConfig.mainLLM) ? '' : '(Not Supported)'}
+                     </label>
+                     <div className="flex items-center gap-4">
+                        <input 
+                          type="range" 
+                          id="main-temp" 
+                          min="0" max="1" step="0.1" 
+                          className="w-full disabled:opacity-50"
+                          disabled={!supportsTemperature(aiConfig.mainLLM)}
+                          value={aiConfig.mainTemp} 
+                          onChange={(e) => {
+                            setAiConfig({...aiConfig, mainTemp: parseFloat(e.target.value)});
+                            setIsDirty(true);
+                          }} 
+                        />
+                        <span className="text-sm font-medium text-text-primary w-8 text-right">{aiConfig.mainTemp}</span>
+                     </div>
+                  </div>
+                </div>
+
+                {/* Backup LLM */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-border">
+                  <div>
+                    <label htmlFor="backup-llm" className="block text-sm font-medium text-text-secondary mb-1">Backup LLM</label>
+                    <SearchableSelect
+                      options={aiModelsList.map(m => ({ value: m.id, label: m.id }))}
+                      value={aiConfig.backupLLM}
+                      onChange={(val) => {
+                        setAiConfig({ ...aiConfig, backupLLM: val });
+                        setIsDirty(true);
+                      }}
+                    />
+                  </div>
+                  <div>
+                     <label htmlFor="backup-temp" className={`block text-sm font-medium mb-1 ${supportsTemperature(aiConfig.backupLLM) ? 'text-text-secondary' : 'text-text-muted'}`}>
+                        Temperature
+                     </label>
+                     <div className="flex items-center gap-4">
+                        <input 
+                          type="range" 
+                          id="backup-temp" 
+                          min="0" max="1" step="0.1" 
+                          className="w-full disabled:opacity-50"
+                          disabled={!supportsTemperature(aiConfig.backupLLM)}
+                          value={aiConfig.backupTemp} 
+                          onChange={(e) => {
+                            setAiConfig({...aiConfig, backupTemp: parseFloat(e.target.value)});
+                            setIsDirty(true);
+                          }} 
+                        />
+                        <span className="text-sm font-medium text-text-primary w-8 text-right">{aiConfig.backupTemp}</span>
+                     </div>
+                  </div>
+                </div>
+
+                {/* 'Ask AI' Config (A21) */}
+                <div className="pt-4 border-t border-border">
+                    <div className="flex justify-between items-center mb-4">
+                      <div>
+                        <h4 className="text-sm font-bold text-text-primary">'Ask AI' Feature</h4>
+                        <p className="text-xs text-text-muted">Allow users to refine report text using AI.</p>
+                      </div>
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                            setAiConfig({ ...aiConfig, askAiEnabled: !aiConfig.askAiEnabled });
+                            setIsDirty(true);
+                        }} 
+                        className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors ${aiConfig.askAiEnabled ? 'bg-primary' : 'bg-gray-200'}`}
+                      >
+                        <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${aiConfig.askAiEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                      </button>
+                    </div>
+                    
+                    {aiConfig.askAiEnabled && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                              <label htmlFor="ask-ai-llm" className="block text-sm font-medium text-text-secondary mb-1">'Ask AI' Model</label>
+                              <SearchableSelect
+                                options={aiModelsList.map(m => ({ value: m.id, label: m.id }))}
+                                value={aiConfig.askAiLLM}
+                                onChange={(val) => {
+                                  setAiConfig({ ...aiConfig, askAiLLM: val });
+                                  setIsDirty(true);
+                                }}
+                              />
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* 2. MODEL MANAGEMENT SECTION (NEW) */}
+                <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border space-y-6">
+                  <div className="flex justify-between items-center border-b border-border pb-4">
+                    <h3 className="text-lg font-semibold text-text-primary">Model Management</h3>
+                    <button
+                      onClick={() => openModal('addModel' as any)}
+                      className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-3 py-1.5 hover:bg-bg-medium"
+                    >
+                      + Add Model
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto border border-border rounded-lg">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-bg-medium text-xs uppercase text-text-muted">
+                        <tr>
+                          <th className="p-3 cursor-pointer hover:bg-border/50" onClick={() => handleModelSort('id')}>Model ID</th>
+                          <th className="p-3 cursor-pointer hover:bg-border/50" onClick={() => handleModelSort('context_window')}>Context</th>
+                          <th className="p-3 cursor-pointer hover:bg-border/50" onClick={() => handleModelSort('input_cost_per_m')}>In ($/1M)</th>
+                          <th className="p-3 cursor-pointer hover:bg-border/50" onClick={() => handleModelSort('output_cost_per_m')}>Out ($/1M)</th>
+                          <th className="p-3 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {sortedModels.map(model => (
+                          <tr key={model.id} className="hover:bg-bg-medium/30">
+                            <td className="p-3 font-mono text-xs">{model.id}</td>
+                            <td className="p-3">{model.context_window.toLocaleString()}</td>
+                            <td className="p-3">${Number(model.input_cost_per_m).toFixed(2)}</td>
+                            <td className="p-3">${Number(model.output_cost_per_m).toFixed(2)}</td>
+                            <td className="p-3 text-right">
+                              <button onClick={() => handleDeleteModel(model.id)} className="text-xs text-error hover:underline">Delete</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
-              {/* Temperature (A18, A19) */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
-                  <label htmlFor="main-temp" className="block text-md font-semibold text-text-primary mb-2">Main LLM Temperature</label>
-                  <div className="flex items-center gap-4">
-                    <input type="range" id="main-temp" min="0" max="1" step="0.1" value={mainLLMTemp} onChange={(e) => setMainLLMTemp(parseFloat(e.target.value))} className="w-full" />
-                    <span className="text-sm font-medium text-text-primary w-10 text-right">{mainLLMTemp}</span>
-                  </div>
+
+              {/* 2. PROMPTS SECTION */}
+              <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border space-y-6">
+                <div className="flex justify-between items-center border-b border-border pb-4">
+                  <h3 className="text-lg font-semibold text-text-primary">Default Prompts</h3>
                 </div>
-                <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
-                  <label htmlFor="backup-temp" className="block text-md font-semibold text-text-primary mb-2">Backup LLM Temperature</label>
-                  <div className="flex items-center gap-4">
-                    <input type="range" id="backup-temp" min="0" max="1" step="0.1" value={backupLLMTemp} onChange={(e) => setBackupLLMTemp(parseFloat(e.target.value))} className="w-full" />
-                    <span className="text-sm font-medium text-text-primary w-10 text-right">{backupLLMTemp}</span>
-                  </div>
-                </div>
-              </div>
-              {/* Default Prompts (A20) */}
-              <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border space-y-4">
-                <h4 className="text-md font-semibold text-text-primary">Default Prompts</h4>
-                <div>
-                  <div className="flex justify-between items-center">
-                    <label htmlFor="prompt-persona" className="block text-sm font-medium text-text-secondary mb-1">Persona (System Prompt)</label>
-                    <button onClick={() => openModal('promptHistory')} className="text-xs font-medium text-primary hover:underline">View Version History</button>
-                  </div>
-                  <textarea id="prompt-persona" rows={3} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm"></textarea>
-                </div>
-                <div>
-                  <div className="flex justify-between items-center">
-                    <label htmlFor="prompt-evidence" className="block text-sm font-medium text-text-secondary mb-1">Evidence Collection</label>
-                    <button onClick={() => openModal('promptHistory')} className="text-xs font-medium text-primary hover:underline">View Version History</button>
-                  </div>
-                  <textarea id="prompt-evidence" rows={4} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm"></textarea>
-                </div>
-                <div>
-                  <div className="flex justify-between items-center">
-                    <label htmlFor="prompt-analysis" className="block text-sm font-medium text-text-secondary mb-1">Competency Analysis</label>
-                    <button onClick={() => openModal('promptHistory')} className="text-xs font-medium text-primary hover:underline">View Version History</button>
-                  </div>
-                  <textarea id="prompt-analysis" rows={4} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm"></textarea>
-                </div>
-                <div>
-                  <div className="flex justify-between items-center">
-                    <label htmlFor="prompt-summary" className="block text-sm font-medium text-text-secondary mb-1">Executive Summary</label>
-                    <button onClick={() => openModal('promptHistory')} className="text-xs font-medium text-primary hover:underline">View Version History</button>
-                  </div>
-                  <textarea id="prompt-summary" rows={4} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm"></textarea>
-                </div>
-                <div className="flex justify-end">
-                  <button className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors">Save Default Prompts</button>
-                </div>
-              </div>
-              {/* 'Ask AI' Settings (A21) */}
-              <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border space-y-4">
-                <div className="flex justify-between items-center">
-                  <h4 className="text-md font-semibold text-text-primary">'Ask AI' (Fine-Tune) Feature</h4>
-                  <button type="button" onClick={() => setAskAiEnabled(!askAiEnabled)} className={`relative inline-flex items-center h-6 rounded-full w-11 ${askAiEnabled ? 'bg-primary' : 'bg-gray-200'}`}>
-                    <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition ${askAiEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
-                  </button>
-                </div>
-                {askAiEnabled && (
-                  <div className="space-y-4 pt-4 border-t border-border">
+
+                {/* Standard Prompts */}
+                <div className="space-y-6">
                     <div>
-                      <label htmlFor="ask-ai-llm" className="block text-sm font-medium text-text-secondary mb-1">'Ask AI' LLM</label>
-                      <select id="ask-ai-llm" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
-                        <option>openrouter/anthropic/claude-3-opus</option>
-                      </select>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-sm font-medium text-text-secondary">Persona (System Prompt)</label>
+                        <button onClick={() => openModal('promptHistory')} className="text-xs font-medium text-primary hover:underline">View History</button>
+                      </div>
+                      <textarea 
+                        rows={3} 
+                        className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+                        value={defaultPrompts.persona}
+                        onChange={(e) => {
+                            setDefaultPrompts({ ...defaultPrompts, persona: e.target.value });
+                            setIsDirty(true);
+                        }}
+                      />
                     </div>
                     <div>
-                      <label htmlFor="prompt-ask-ai" className="block text-sm font-medium text-text-secondary mb-1">'Ask AI' System Prompt</label>
-                      <textarea id="prompt-ask-ai" rows={4} className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm"></textarea>
+                      <label className="block text-sm font-medium text-text-secondary mb-1">Evidence Collection Prompt</label>
+                      <textarea 
+                        rows={4} 
+                        className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+                        value={defaultPrompts.evidence}
+                        onChange={(e) => {
+                            setDefaultPrompts({ ...defaultPrompts, evidence: e.target.value });
+                            setIsDirty(true);
+                        }}
+                      />
                     </div>
-                    <div className="flex justify-end">
-                      <button className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors">Save 'Ask AI' Settings</button>
+                    <div>
+                      <label className="block text-sm font-medium text-text-secondary mb-1">Competency Analysis Prompt</label>
+                      <textarea 
+                        rows={4} 
+                        className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+                        value={defaultPrompts.analysis}
+                        onChange={(e) => {
+                            setDefaultPrompts({ ...defaultPrompts, analysis: e.target.value });
+                            setIsDirty(true);
+                        }}
+                      />
                     </div>
-                  </div>
+                    <div>
+                      <label className="block text-sm font-medium text-text-secondary mb-1">Executive Summary Prompt</label>
+                      <textarea 
+                        rows={4} 
+                        className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+                        value={defaultPrompts.summary}
+                        onChange={(e) => {
+                            setDefaultPrompts({ ...defaultPrompts, summary: e.target.value });
+                            setIsDirty(true);
+                        }}
+                      />
+                    </div>
+                </div>
+
+                {/* 'Ask AI' Prompt (Included in Prompts section for unified saving) */}
+                {aiConfig.askAiEnabled && (
+                    <div className="pt-6 border-t border-border">
+                        <label className="block text-sm font-medium text-text-secondary mb-1">'Ask AI' System Prompt</label>
+                        <p className="text-xs text-text-muted mb-2">Used when the user asks the AI to refine text.</p>
+                        <textarea 
+                            rows={3} 
+                            className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+                            value={defaultPrompts.askAiSystem}
+                            onChange={(e) => {
+                                setDefaultPrompts({ ...defaultPrompts, askAiSystem: e.target.value });
+                                setIsDirty(true);
+                            }}
+                        />
+                    </div>
                 )}
               </div>
             </div>
@@ -922,11 +1395,80 @@ export default function AdminPanelPage() {
         </div>
       )}
 
+      {/* Edit Dictionary Modal */}
+      {modals.editDictionary && editingDictionary && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => handleCloseModal('editDictionary')}>
+          <div className="w-full max-w-4xl bg-bg-light rounded-lg shadow-lg flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center p-6 border-b border-border">
+              <div className="flex items-center gap-3">
+                <h3 className="text-lg font-semibold text-text-primary">
+                  {editingDictionary.is_in_use ? 'View Dictionary' : 'Edit Dictionary'}
+                </h3>
+                {editingDictionary.is_in_use && (
+                  <span className="px-2 py-0.5 text-xs font-medium bg-info/10 text-info rounded border border-info/20">
+                    Read-Only (Active)
+                  </span>
+                )}
+              </div>
+              <button className="text-text-muted hover:text-text-primary" onClick={() => handleCloseModal('editDictionary')}>&times;</button>
+            </div>
+            
+            <div className="p-6 space-y-4 flex-1 overflow-hidden flex flex-col">
+              <div>
+                <label className="block text-sm font-medium text-text-secondary mb-1">Dictionary Name</label>
+                <input 
+                  type="text" 
+                  className="w-full rounded-md border border-border px-3 py-2 disabled:bg-bg-medium disabled:text-text-muted"
+                  value={editingDictionary.name}
+                  disabled={editingDictionary.is_in_use}
+                  onChange={(e) => {
+                    setEditingDictionary({...editingDictionary, name: e.target.value});
+                    setIsDirty(true);
+                  }}
+                />
+              </div>
+              <div className="flex-1 flex flex-col overflow-hidden">
+                <label className="block text-sm font-medium text-text-secondary mb-1">Dictionary Content</label>
+                <div className="flex-1 overflow-y-auto border border-border rounded-md bg-bg-light p-4">
+                  {editingDictionary.is_in_use ? (
+                    <DictionaryContentDisplay content={editingDictionary.content} />
+                  ) : (
+                    <DictionaryEditor
+                      content={editingDictionary.content}
+                      onChange={(newContent) => {
+                        setEditingDictionary({ ...editingDictionary, content: newContent })
+                        setIsDirty(true);
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-border flex justify-end gap-3">
+              <button className="bg-white text-text-secondary border border-border rounded-md px-4 py-2" onClick={() => handleCloseModal('editDictionary')}>
+                {editingDictionary.is_in_use ? 'Close' : 'Cancel'}
+              </button>
+
+              {!editingDictionary.is_in_use && (
+                <button 
+                  className="bg-primary text-white rounded-md px-4 py-2 disabled:opacity-50"
+                  onClick={handleSaveDictionary}
+                  disabled={isSavingDict}
+                >
+                  {isSavingDict ? 'Saving...' : 'Save Changes'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add/Edit User Modal */}
       {(modals.addUser || modals.editUser) && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-40">
           {/* Close on backdrop click */}
-          <div className="fixed inset-0" onClick={() => { closeModal('addUser'); closeModal('editUser'); }}></div>
+          <div className="fixed inset-0" onClick={() => { handleCloseModal('addUser'); handleCloseModal('editUser'); }}></div>
           
           <div className="w-full max-w-lg bg-bg-light rounded-lg shadow-lg relative z-50">
             <div className="flex items-center justify-between p-6 border-b border-border">
@@ -935,7 +1477,7 @@ export default function AdminPanelPage() {
               </h3>
               <button 
                 className="text-text-muted hover:text-text-primary" 
-                onClick={() => { closeModal('addUser'); closeModal('editUser'); }}
+                onClick={() => { handleCloseModal('addUser'); handleCloseModal('editUser'); }}
               >
                 &times;
               </button>
@@ -949,7 +1491,10 @@ export default function AdminPanelPage() {
                   type="text" 
                   className="w-full rounded-md border border-border px-3 py-2 bg-bg-light shadow-sm text-sm"
                   value={newUser.name}
-                  onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+                  onChange={(e) => {
+                    setNewUser({ ...newUser, name: e.target.value });
+                    setIsDirty(true);
+                  }}
                   placeholder="e.g. John Doe"
                 />
               </div>
@@ -961,7 +1506,10 @@ export default function AdminPanelPage() {
                   type="email" 
                   className="w-full rounded-md border border-border px-3 py-2 bg-bg-light shadow-sm text-sm"
                   value={newUser.email}
-                  onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                  onChange={(e) => {
+                    setNewUser({ ...newUser, email: e.target.value });
+                    setIsDirty(true);
+                  }}
                   placeholder="john@company.com"
                 />
               </div>
@@ -973,7 +1521,10 @@ export default function AdminPanelPage() {
                   type="password" 
                   className="w-full rounded-md border border-border px-3 py-2 bg-bg-light shadow-sm text-sm"
                   value={newUser.password}
-                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                  onChange={(e) => {
+                    setNewUser({ ...newUser, password: e.target.value });
+                    setIsDirty(true);
+                  }}
                   placeholder={modals.editUser ? 'Leave blank to keep current' : 'Enter password'}
                 />
               </div>
@@ -984,7 +1535,10 @@ export default function AdminPanelPage() {
                 <select 
                   className="w-full rounded-md border border-border px-3 py-2 bg-bg-light shadow-sm text-sm"
                   value={newUser.role}
-                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                  onChange={(e) => {
+                    setNewUser({ ...newUser, role: e.target.value });
+                    setIsDirty(true);
+                  }}
                 >
                   <option value="User">User</option>
                   <option value="Project Manager">Project Manager</option>
@@ -996,18 +1550,22 @@ export default function AdminPanelPage() {
             <div className="p-4 bg-bg-medium border-t border-border flex justify-end gap-3">
               <button 
                 className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" 
-                onClick={() => { closeModal('addUser'); closeModal('editUser'); }}
+                onClick={() => { 
+                  handleCloseModal('addUser'); 
+                  handleCloseModal('editUser'); 
+                }}
               >
                 Cancel
               </button>
               
               {/* This button now calls handleAddUser */}
-              <button 
-                className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover"
+              <LoadingButton 
                 onClick={modals.addUser ? handleAddUser : handleEditUser}
+                isLoading={isSavingUser}
+                loadingText={modals.addUser ? 'Adding...' : 'Saving...'}
               >
                 {modals.addUser ? 'Add User' : 'Save Changes'}
-              </button>
+              </LoadingButton>
             </div>
           </div>
         </div>
@@ -1016,20 +1574,52 @@ export default function AdminPanelPage() {
       {modals.addSimMethod && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
-            <h3 className="text-lg font-semibold text-text-primary">Add New Simulation Method</h3>
-            <div className="mt-4">
-              <label className="text-sm font-medium mb-1 block">Method Name</label>
-              <input 
-                type="text"
-                className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
-                placeholder="e.g. Group Discussion"
-                value={newMethodName}
-                onChange={(e) => setNewMethodName(e.target.value)}
-              />
+            <h3 className="text-lg font-semibold text-text-primary">
+              {isEditingMethod ? 'Edit Simulation Method' : 'Add New Simulation Method'}
+            </h3>
+
+            <div className="mt-4 space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Method Name</label>
+                <input 
+                  type="text"
+                  className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm"
+                  placeholder="e.g. Group Discussion"
+                  value={methodForm.name}
+                  onChange={(e) => {
+                    setMethodForm({...methodForm, name: e.target.value});
+                    setIsDirty(true);
+                  }}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Description</label>
+                <textarea
+                  rows={3}
+                  className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm resize-none"
+                  placeholder="What does this method measure?"
+                  value={methodForm.description}
+                  onChange={(e) => {
+                    setMethodForm({...methodForm, description: e.target.value});
+                    setIsDirty(true);
+                  }}
+                />
+              </div>
             </div>
             <div className="flex justify-end gap-3 mt-6">
-              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('addSimMethod')}>Cancel</button>
-              <button className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover" onClick={handleCreateMethod}>Add Method</button>
+              <button 
+                className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" 
+                onClick={() => handleCloseModal('addSimMethod')}
+              >
+                Cancel
+              </button>
+              <LoadingButton 
+                onClick={handleCreateMethod}
+                isLoading={isSavingMethod}
+                loadingText={isEditingMethod ? 'Saving...' : 'Adding...'}
+              >
+                {isEditingMethod ? 'Save Changes' : 'Add Method'}
+              </LoadingButton>
             </div>
           </div>
         </div>
@@ -1056,15 +1646,86 @@ export default function AdminPanelPage() {
 
             <div className="flex justify-end gap-3 mt-6">
               <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium" onClick={() => closeModal('selectSimMethod')}>Cancel</button>
-              <button
-                className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover disabled:opacity-50"
-                disabled={!targetMethodId}
+              <LoadingButton
                 onClick={confirmSimFileUpload}
+                isLoading={isUploadingSimFile}
+                loadingText="Uploading..."
+                disabled={!targetMethodId}
               >
                 Upload
-              </button>
+              </LoadingButton>
             </div>
           </div>
+        </div>
+      )}
+
+      {blocker.state === "blocked" && (
+        <UnsavedChangesModal
+          isOpen={true}
+          onStay={() => blocker.reset()}
+          onLeave={() => blocker.proceed()}
+        />
+      )}
+
+      {showUnsavedModal && (
+        <UnsavedChangesModal
+          isOpen={true}
+          onStay={handleStay}
+          onLeave={handleLeave}
+        />
+      )}
+
+      {/* Add Model Modal */}
+      {modals['addModel' as keyof typeof modals] && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
+                <h3 className="text-lg font-semibold text-text-primary mb-4">Add AI Model</h3>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-xs font-bold text-text-muted uppercase mb-1">OpenRouter Model ID</label>
+                        <input 
+                            type="text" 
+                            className="w-full rounded-md border border-border px-3 py-2"
+                            placeholder="e.g. google/gemini-flash-1.5"
+                            value={newModelForm.id}
+                            onChange={(e) => setNewModelForm({...newModelForm, id: e.target.value})}
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-text-muted uppercase mb-1">Context Window</label>
+                        <input 
+                            type="number" 
+                            className="w-full rounded-md border border-border px-3 py-2"
+                            value={newModelForm.context_window}
+                            onChange={(e) => setNewModelForm({...newModelForm, context_window: parseInt(e.target.value)})}
+                        />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-text-muted uppercase mb-1">Input Cost ($/1M)</label>
+                            <input 
+                                type="number" step="0.01"
+                                className="w-full rounded-md border border-border px-3 py-2"
+                                value={newModelForm.input_cost}
+                                onChange={(e) => setNewModelForm({...newModelForm, input_cost: parseFloat(e.target.value)})}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-text-muted uppercase mb-1">Output Cost ($/1M)</label>
+                            <input 
+                                type="number" step="0.01"
+                                className="w-full rounded-md border border-border px-3 py-2"
+                                value={newModelForm.output_cost}
+                                onChange={(e) => setNewModelForm({...newModelForm, output_cost: parseFloat(e.target.value)})}
+                            />
+                        </div>
+                    </div>
+                </div>
+                <div className="flex justify-end gap-3 mt-6">
+                    <button className="px-4 py-2 text-sm font-medium text-text-secondary bg-white border border-border rounded-md hover:bg-bg-medium" onClick={() => closeModal('addModel' as any)}>Cancel</button>
+                    <LoadingButton onClick={handleAddModel} isLoading={isSavingMethod}>Add Model</LoadingButton>
+                </div>
+            </div>
         </div>
       )}
 

@@ -57,7 +57,8 @@ export const uploadToGCS = async (
 /**
  * (Optional) Helper to get a Signed URL for downloading/viewing private files
  */
-export const getSignedUrl = async (gcsPath: string): Promise<string> => {
+export const getSignedUrl = async (gcsPath: string, downloadName?: string): Promise<string> => {
+    if (!gcsPath) return "";
     // gcsPath format: gs://bucket-name/path/to/file
     // We need to parse it or just store the path relative to bucket.
     // For simplicity in this MVP, let's assume we stored the full gs:// URI
@@ -70,15 +71,44 @@ export const getSignedUrl = async (gcsPath: string): Promise<string> => {
         const filePath = gcsPath.replace(`gs://${bucketName}/`, '');
         const file = bucket.file(filePath);
 
-        const [url] = await file.getSignedUrl({
-            version: 'v4',
-            action: 'read',
-            expires: Date.now() + 15 * 60 * 1000, // 15 minutes
-        });
+        const config: any = {
+          version: 'v4',
+          action: 'read',
+          expires: Date.now() + 15 * 60 * 1000,
+        }
+
+        if (downloadName) {
+          config.responseDisposition = `attachment; filename="${downloadName}"`;
+        }
+
+        const [url] = await file.getSignedUrl(config);
         
         return url;
-    } catch (error) {
-        console.error("Error generating signed URL:", error);
-        return "";
+    } catch (error: any) {
+        console.warn(`[Storage] Signed URL generation skipped: ${error.message}`);
+        const cleanPath = gcsPath.replace(/^gs:\/\/[^/]+\//, '');
+        return `https://storage.googleapis.com/${bucketName}/${cleanPath}`;
     }
+};
+
+/**
+ * Downloads a file from GCS into a Buffer.
+ */
+export const downloadBufferFromGCS = async (gcsPath: string): Promise<Buffer> => {
+  if (!gcsPath) throw new Error("GCS path is empty");
+
+  try {
+    const bucket = storage.bucket(bucketName);
+    
+    // Clean the path: remove 'gs://bucketName/' prefix
+    const filePath = gcsPath.replace(/^gs:\/\/[^/]+\//, '');
+    
+    const file = bucket.file(filePath);
+    const [buffer] = await file.download();
+    
+    return buffer;
+  } catch (error) {
+    console.error(`[Storage] Failed to download ${gcsPath}:`, error);
+    throw error;
+  }
 };

@@ -1,9 +1,11 @@
 // frontend/src/pages/NewReportPage.tsx
-import { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate, useParams, useBlocker } from 'react-router-dom';
 import apiService from '../services/apiService';
 import LoadingButton from '../components/LoadingButton';
 import DragDropUploader from '../components/DragDropUploader';
+import UnsavedChangesModal from '../components/UnsavedChangesModal';
+import { useToastStore } from '../state/toastStore';
 
 // Define data types
 interface Competency {
@@ -92,6 +94,8 @@ export default function NewReportPage() {
   const navigate = useNavigate();
   const { projectId } = useParams();
 
+  const addToast = useToastStore((state) => state.addToast);
+
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isGeneratingDisabled, setIsGeneratingDisabled] = useState(true);
 
@@ -105,6 +109,10 @@ export default function NewReportPage() {
   const [specificTargets, setSpecificTargets] = useState<Record<string, string>>({});
 
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+
+  const [reportTitle, setReportTitle] = useState('');
+  const isSubmitted = useRef(false);
+  const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
     if (!projectId) return;
@@ -198,11 +206,10 @@ export default function NewReportPage() {
   }, [files]);
 
   const handleGenerateReport = async () => {
-    const title = (document.getElementById('report-title') as HTMLInputElement).value;
     const specificContext = (document.getElementById('report-context') as HTMLTextAreaElement).value;
 
-    if (!title) {
-      alert("Please enter a report title.");
+    if (!reportTitle) {
+      addToast('Please enter a report title.', 'info');
       return;
     }
     
@@ -217,7 +224,7 @@ export default function NewReportPage() {
     setIsGenerating(true);
     try {
       const payload = {
-        title,
+        title: reportTitle,
         projectId,
         targetLevels: specificTargets,
         specificContext,
@@ -245,15 +252,32 @@ export default function NewReportPage() {
         });
       }
 
+      isSubmitted.current = true;
+      
+      setIsDirty(false);
+
       // Navigate to the correct, plural-path route
       navigate(`/reports/${reportId}`);
 
     } catch (error) {
       console.error("Failed to create report:", error);
-      alert("Error: Could not create report.");
+      addToast('Error: Could not create report.', 'error');
       setIsGenerating(false);
     }
   };
+
+  useEffect(() => {
+    if (reportTitle || files.length > 0) {
+      setIsDirty(true);
+    } else {
+      setIsDirty(false);
+    }
+  }, [reportTitle, files]);
+
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      !isSubmitted.current && isDirty && currentLocation.pathname !== nextLocation.pathname
+  );
 
   return (
     <>
@@ -269,7 +293,14 @@ export default function NewReportPage() {
             {/* 1. Report Title (U22) */}
             <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border">
               <label htmlFor="report-title" className="text-lg font-semibold text-text-primary mb-3 block">Report Title</label>
-              <input type="text" id="report-title" placeholder="e.g., Analysis of Candidate A" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none" />
+              <input 
+                type="text" 
+                id="report-title" 
+                placeholder="e.g., Analysis of Candidate A" 
+                className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none" 
+                value={reportTitle}
+                onChange={(e) => setReportTitle(e.target.value)}
+              />
             </div>
 
             {/* 2. Upload Assessment Results (U23, U24) */}
@@ -401,6 +432,15 @@ export default function NewReportPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Unsaved Changes Modal */}
+      {blocker.state === "blocked" && (
+        <UnsavedChangesModal
+          isOpen={true}
+          onStay={() => blocker.reset()}
+          onLeave={() => blocker.proceed()}
+        />
       )}
     </>
   );

@@ -29,7 +29,8 @@ export default function ProjectsDashboard() {
   const [archivedProjects, setArchivedProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showingArchived, setShowingArchived] = useState(false); //P4
-  const [modals, setModals] = useState({ archive: false, unarchive: false });
+  const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
+  const [modals, setModals] = useState({ archive: false, unarchive: false, delete: false });
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set()); //P3
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -120,7 +121,7 @@ export default function ProjectsDashboard() {
     }
   };
 
-  // --- NEW: Function to handle the actual UNarchive API call ---
+  // --- Function to handle the actual UNarchive API call ---
   const handleUnarchive = async () => {
     const idsToUnarchive: string[] = [];
     if (projectToUnarchive) {
@@ -157,6 +158,22 @@ export default function ProjectsDashboard() {
       setIsProcessing(false);
     }
   };  
+
+  // Function to handle deletion
+  const handleDelete = async () => {
+    if (!projectToDelete) return;
+    setIsProcessing(true);
+    try {
+      await apiService.delete(`/projects/${projectToDelete}`);
+      addToast("Project permanently deleted.", 'success');
+      fetchArchivedProjects(searchQuery);
+      closeModal('delete');
+    } catch (error: any) {
+      addToast(error.response?.data?.message || "Failed to delete.", 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
   
   // Real modal handlers (FIXED)
   const openModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: true }));
@@ -165,9 +182,10 @@ export default function ProjectsDashboard() {
     if (modal === 'archive') {
       setProjectToArchive(null);
     }
-    if (modal === 'unarchive') { // <-- ADD THIS BLOCK
+    if (modal === 'unarchive') {
       setProjectToUnarchive(null);
     }
+    if (modal === 'delete') setProjectToDelete(null);
   };
 
   // (U10) Mock handler for row click
@@ -466,6 +484,7 @@ export default function ProjectsDashboard() {
                     {(role === 'Project Manager' || role === 'Admin') && (
                         <td className="p-3 pr-6 text-right">
                             {showingArchived ? (
+                              <div className="flex justify-end gap-3">
                                 <button
                                   className={`text-xs ${project.canArchive ? 'text-text-secondary hover:text-info' : 'text-text-muted/70 cursor-not-allowed'}`}
                                   onClick={project.canArchive ? () => {
@@ -475,6 +494,18 @@ export default function ProjectsDashboard() {
                                 >
                                     Unarchive
                                 </button>
+                                {role === 'Admin' && (
+                                  <button
+                                    className="text-xs text-error/80 hover:text-error"
+                                    onClick={() => {
+                                      setProjectToDelete(project.id);
+                                      openModal('delete');
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
+                                )}
+                              </div>
                             ) : (
                                 <button
                                   className={`text-xs ${project.canArchive ? 'text-text-secondary hover:text-error' : 'text-text-muted/70 cursor-not-allowed'}`}
@@ -561,6 +592,33 @@ export default function ProjectsDashboard() {
         </div>
       )}
       
+      {/* Delete Confirmation Modal */}
+      {modals.delete && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
+            <h3 className="text-lg font-semibold text-error">Delete Permanently?</h3>
+            <p className="text-sm text-text-secondary mt-2">
+              This action cannot be undone. All reports and data associated with this project will be lost.
+            </p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium"
+                onClick={() => closeModal('delete')}
+              >
+                Cancel
+              </button>
+              <LoadingButton
+                variant="danger"
+                onClick={handleDelete}
+                isLoading={isProcessing}
+                loadingText="Deleting..."
+              >
+                Delete
+              </LoadingButton>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 // frontend/src/pages/ReportPage.tsx
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useBlocker } from 'react-router-dom';
 import apiService from '../services/apiService';
 import { useUserStore } from '../state/userStore';
 import { useToastStore } from '../state/toastStore';
@@ -14,6 +14,7 @@ import { type EvidenceCardData } from '../components/report/EvidenceCard';
 import CompetencyAnalysisList from '../components/report/CompetencyAnalysisList'; // Child 1
 import ExecutiveSummary from '../components/report/ExecutiveSummary'; // Child 2
 import { type CompetencyAnalysisData } from '../components/report/CompetencyAnalysisCard'; // Import Type
+import UnsavedChangesModal from '../components/UnsavedChangesModal';
 
 // --- Data Types ---
 interface ReportData {
@@ -21,8 +22,10 @@ interface ReportData {
   status: 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   projectId: string;
   creatorId: string;
+  isArchived: boolean;
   currentPhase: number;
   targetPhase: number;
+  specificContext?: string;
   evidence: EvidenceCardData[];
   rawFiles: {
     id: string;
@@ -81,42 +84,80 @@ function CreateChangeModal({
   const [levelList, setLevelList] = useState<string[]>([]);
   const [kbList, setKbList] = useState<string[]>([]);
 
+  // 1. Load Competencies (Robust check for 'content' wrapper)
   useEffect(() => {
-    if (dictionary?.kompetensi) {
-      const competencies = dictionary.kompetensi.map((c: any) => ({
-        id: c.id,
+    if (!isOpen || !dictionary) return;
+
+    const content = dictionary.content || dictionary;
+    
+    if (content?.kompetensi) {
+      const competencies = content.kompetensi.map((c: any) => ({
+        // FIX: Use namaKompetensi as ID if c.id is missing
+        id: c.id || c.namaKompetensi, 
         name: c.name || c.namaKompetensi,
       }));
       setCompetencyList(competencies);
-      if (!evidenceToEdit && competencies.length > 0) setCompetency(competencies[0].id);
+      
+      if (!evidenceToEdit && competencies.length > 0 && !competency) {
+        setCompetency(competencies[0].id);
+      }
     }
   }, [dictionary, evidenceToEdit, isOpen]);
 
+  // 2. Load Levels when Competency Changes
   useEffect(() => {
-    if (competency && dictionary?.kompetensi) {
-      const comp = dictionary.kompetensi.find((c: any) => c.id === competency);
-      const levels = comp?.level?.map((l: { nomor: string }) => l.nomor) || [];
+    if (!evidenceToEdit) {
+        setLevel('');
+        setKb('');
+    }
+
+    if (competency && dictionary) {
+      const content = dictionary.content || dictionary;
+      // FIX: Match against id OR namaKompetensi
+      const comp = content?.kompetensi?.find((c: any) => (c.id || c.namaKompetensi) === competency);
+      
+      const levels = comp?.level?.map((l: { nomor: string }) => String(l.nomor)) || [];
       setLevelList(levels);
-      if (!evidenceToEdit || evidenceToEdit.competency !== competency) setLevel(levels[0] || '');
+
+      if (!evidenceToEdit && levels.length > 0) {
+          setLevel(levels[0]);
+      } else if (evidenceToEdit && evidenceToEdit.competency === competency) {
+          setLevel(evidenceToEdit.level);
+      }
     }
   }, [competency, dictionary, evidenceToEdit]);
 
+  // 3. Load Key Behaviors when Level Changes
   useEffect(() => {
-    if (competency && level && dictionary?.kompetensi) {
-      const comp = dictionary.kompetensi.find((c: any) => c.id === competency);
-      const lvl = comp?.level?.find((l: any) => l.nomor === level);
+    if (!evidenceToEdit) setKb('');
+
+    if (competency && level && dictionary) {
+      const content = dictionary.content || dictionary;
+      // FIX: Match against id OR namaKompetensi
+      const comp = content?.kompetensi?.find((c: any) => (c.id || c.namaKompetensi) === competency);
+      const lvl = comp?.level?.find((l: any) => String(l.nomor) === level);
+      
       const kbs = lvl?.keyBehavior || [];
       setKbList(kbs);
-      if (!evidenceToEdit || evidenceToEdit.level !== level) setKb(kbs[0] || '');
+
+      if (!evidenceToEdit && kbs.length > 0) {
+          setKb(kbs[0]);
+      } else if (evidenceToEdit && evidenceToEdit.level === level) {
+          setKb(evidenceToEdit.kb);
+      }
     }
   }, [competency, level, dictionary, evidenceToEdit]);
 
+  // 4. Initialize for Edit Mode
   useEffect(() => {
     if (evidenceToEdit && isOpen) {
       setCompetency(evidenceToEdit.competency);
-      setLevel(evidenceToEdit.level);
-      setKb(evidenceToEdit.kb);
+      // Level and KB setting is handled by the dependent effects above 
+      // to ensure lists are populated first.
       setReasoning(evidenceToEdit.reasoning);
+    } else if (!evidenceToEdit && isOpen) {
+        // Clear reasoning on new create
+        setReasoning('');
     }
   }, [evidenceToEdit, isOpen]);
 
@@ -228,7 +269,10 @@ export default function ReportPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [reportData, setReportData] = useState<ReportData | null>(null);
 
+  const [isDirty, setIsDirty] = useState(false);
+
   // State for content
+  const [reportTitle, setReportTitle] = useState('');
   const [competencyData, setCompetencyData] = useState<any[]>([]);
   const [summaryData, setSummaryData] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -281,14 +325,14 @@ export default function ReportPage() {
 
   // --- Derived ---
   const isCreator = reportData?.creatorId === currentUserId;
-  const isViewOnly = !isCreator;
+  const isViewOnly = !isCreator || reportData?.isArchived;
   const isEvidenceLocked = highestPhaseVisible !== 'evidence';
   const isAnalysisLocked = highestPhaseVisible === 'summary';
 
   const activeFile = reportData?.rawFiles.find(f => f.id === activeFileId);
   
   // --- Data Fetching ---
-  const fetchReportData = async () => {
+  const fetchReportData = useCallback(async () => {
     if (!reportId) return;
     try {
       setIsLoading(true);
@@ -296,6 +340,7 @@ export default function ReportPage() {
       
       // 1. Handle Report Data
       setReportData(response.data);
+      setReportTitle(response.data.title);
       
       if (!activeFileId && response.data.rawFiles.length > 0) {
         setActiveFileId(response.data.rawFiles[0].id);
@@ -358,7 +403,7 @@ export default function ReportPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [reportId, addToast]);
 
   useEffect(() => {
     fetchReportData();
@@ -403,10 +448,12 @@ export default function ReportPage() {
     setIsSaving(true);
     try {
       await apiService.put(`/reports/${reportId}/content`, {
+        title: reportTitle,
         competencyAnalysis: competencyData,
         executiveSummary: summaryData
       });
       addToast("Report saved successfully.", 'success');
+      setIsDirty(false);
     } catch (e) {
       console.error(e);
       addToast("Failed to save report.", 'error');
@@ -415,11 +462,31 @@ export default function ReportPage() {
     }
   };
 
+    useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check for 's' key combined with Ctrl (Windows/Linux) or Meta (Mac Command)
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault(); // STOP the browser's "Save Page" dialog
+        
+        // Only trigger if not currently saving and user has permission
+        if (!isSaving && !isViewOnly) {
+          console.log("Shortcut: Saving report...");
+          handleSaveReport();
+        }
+      }
+    };
+
+    // Attach listener to the window
+    window.addEventListener('keydown', handleKeyDown);
+    
+    // Cleanup: Remove listener when component unmounts or dependencies change
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleSaveReport, isSaving, isViewOnly]);
+
   const handleExportReport = async () => {
     if (!reportId) return;
     
-    // Save first to ensure export is up to date? Optional, but good UX.
-    // await handleSaveReport(); 
+    await handleSaveReport(); 
 
     try {
       addToast("Generating report document...", 'info');
@@ -433,11 +500,14 @@ export default function ReportPage() {
       link.href = url;
       
       // Try to get filename from header
-      const contentDisposition = response.headers['content-disposition'];
+      const contentDisposition = response.headers['content-disposition'] || response.headers['Content-Disposition'];
       let fileName = 'Report.docx';
       if (contentDisposition) {
-          const match = contentDisposition.match(/filename="?([^"]+)"?/);
-          if (match && match.length > 1) fileName = match[1];
+        const fileNameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (fileNameMatch && fileNameMatch[1]) {
+          // Remove quotes if present
+          fileName = fileNameMatch[1].replace(/['"]/g, '');
+        }
       }
       
       link.setAttribute('download', fileName);
@@ -605,6 +675,11 @@ export default function ReportPage() {
 
   // (RP-7.11) Trigger Phase 2
   const handleGeneratePhase2 = async () => {
+    if (isDirty) {
+      addToast("Please save your changes before generating the analysis.", 'error');
+      return;
+    }
+    
     if (!reportId) return;
     try {
       // 1. Call the new endpoint to start the job
@@ -631,23 +706,27 @@ export default function ReportPage() {
   };
 
   const handleGeneratePhase3 = async () => {
-  if (!reportId) return;
-  try {
-    setHighestPhaseVisible('summary');
-    setAnalysisTab('summary');
-
-    await apiService.post(`/reports/${reportId}/generate/phase3`);
-    addToast("Phase 3 (Executive Summary) generation started...", 'info');
-
-  } catch (error: any) {
-    console.error(error);
-    if (error.response && error.response.status === 400) {
-      addToast(error.response.data.message, 'error');
-    } else {
-      addToast("Failed to start Phase 3 generation.", 'error');
+    if (isDirty) {
+      addToast("Please save your changes before generating the summary.", 'error');
+      return;
     }
-  }
-};
+    if (!reportId) return;
+    try {
+      setHighestPhaseVisible('summary');
+      setAnalysisTab('summary');
+
+      await apiService.post(`/reports/${reportId}/generate/phase3`);
+      addToast("Phase 3 (Executive Summary) generation started...", 'info');
+
+    } catch (error: any) {
+      console.error(error);
+      if (error.response && error.response.status === 400) {
+        addToast(error.response.data.message, 'error');
+      } else {
+        addToast("Failed to start Phase 3 generation.", 'error');
+      }
+    }
+  };
 
 // Inside ReportPage component
 const handleAskAI = (context: string, currentText: string, onApply: (t: string) => void) => {
@@ -684,6 +763,11 @@ const submitRefinement = async () => {
 };
 
 const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [key]: false }));
+
+const blocker = useBlocker(
+  ({ currentLocation, nextLocation }) =>
+    isDirty && currentLocation.pathname !== nextLocation.pathname
+);
   
   if (isLoading && !reportData) {
       return <div className="flex h-screen items-center justify-center text-text-muted">Loading Report...</div>;
@@ -694,13 +778,32 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
       
       {/* Header */}
       <header className="flex-shrink-0 h-16 bg-bg-light border-b border-border flex items-center justify-between px-6 z-20">
-        <div className="flex items-center gap-4">
-            <h1 className="text-lg font-bold text-text-primary truncate max-w-md" title={reportData?.title}>
-                {reportData?.title}
-            </h1>
+        <div className="flex items-center gap-4 flex-1">
+            <input
+              type="text"
+              className="text-lg font-bold text-text-primary bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none transition-colors w-full max-w-md"
+              value={reportTitle}
+              onChange={(e) => {
+                setReportTitle(e.target.value);
+                setIsDirty(true);
+              }}
+              title="Click to edit title"
+            />
             <button onClick={() => setModals(prev => ({ ...prev, viewContext: true }))} className="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded hover:bg-primary/20">
                 View Context
             </button>
+            {/* STATUS BADGES */}
+            {reportData?.isArchived ? (
+              <span className="px-2 py-1 rounded-md bg-error/10 text-error text-xs font-bold border border-error/20 flex items-center gap-1">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M9.5 12h5"/></svg>
+                ARCHIVED
+              </span>
+            ) : isViewOnly ? (
+              <span className="px-2 py-1 rounded-md bg-gray-100 text-gray-600 text-xs font-bold border border-gray-300 flex items-center gap-1">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                VIEW ONLY
+              </span>
+            ) : null}
         </div>
         <div className="flex items-center gap-3">
              {/* Toggle Panels */}
@@ -740,14 +843,16 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
                     </button>
                 )}
              </div>
-             <button
-               className={`bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors flex items-center gap-2 ${reportData?.currentPhase !== 3 ? 'opacity-50 cursor-not-allowed' : ''}`}
-               disabled={!reportData || reportData.currentPhase < reportData.targetPhase}
-               onClick={handleExportReport}
-             >
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Export
-             </button>
+             {reportData && reportData.targetPhase > 1 && (
+               <button
+                 className={`bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors flex items-center gap-2 ${reportData?.currentPhase !== 3 && reportData.currentPhase < reportData.targetPhase ? 'opacity-50 cursor-not-allowed' : ''}`}
+                 disabled={!reportData || reportData.currentPhase < reportData.targetPhase}
+                 onClick={handleExportReport}
+               >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Export
+               </button>
+             )}
              <button 
                onClick={handleSaveReport}
                disabled={isSaving || isViewOnly}
@@ -850,8 +955,9 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
                         reportId={reportId || ''}
                         isViewOnly={isViewOnly || isAnalysisLocked}
                         onGenerateNext={() => {
-                          if (reportData?.targetPhase === 2) {
-                            alert("Analysis is the final phase for this project.");
+                          // NP-4.6: Check if Summary is enabled (Target Phase >= 3)
+                          if (reportData?.targetPhase && reportData.targetPhase < 3) {
+                            addToast("Analysis is the final phase for this project.", 'info');
                             return Promise.resolve();
                           } else {
                             return handleGeneratePhase3();
@@ -860,7 +966,11 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
                         onHighlightEvidence={handleQuoteSelection}
                         onAskAI={handleAskAI}
                         data={competencyData}
-                        onChange={setCompetencyData}
+                        isLastPhase={reportData?.targetPhase === 2}
+                        onChange={(newData) => {
+                          setCompetencyData(newData);
+                          setIsDirty(true);
+                        }}
                     />
                 )}
 
@@ -870,7 +980,10 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
                         isViewOnly={isViewOnly}
                         onAskAI={handleAskAI}
                         data={summaryData}
-                        onChange={setSummaryData}
+                        onChange={(newData) => {
+                          setSummaryData(newData);
+                          setIsDirty(true);
+                        }}
                     />
                 )}
             </div>
@@ -912,24 +1025,32 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
 
       {modals.viewContext && (
         <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex justify-end z-50" onClick={() => setModals(prev => ({ ...prev, viewContext: false }))}>
-             <div className="w-96 bg-bg-light h-full shadow-xl p-6" onClick={e => e.stopPropagation()}>
-                 <h3 className="text-lg font-bold text-text-primary mb-4">Report Context</h3>
-                 <div className="space-y-4">
-                     <div>
-                        <label className="text-xs font-bold text-text-muted uppercase">Report Title</label>
-                        <p className="text-sm">{reportData?.title}</p>
-                     </div>
-                     <div>
-                        <label className="text-xs font-bold text-text-muted uppercase">Files</label>
-                        <ul className="list-disc list-inside text-sm">
-                            {reportData?.rawFiles.map(f => <li key={f.id}>{f.file_name}</li>)}
-                        </ul>
-                     </div>
-                     <button onClick={() => setModals(prev => ({ ...prev, viewContext: false, projectContext: true }))} className="w-full border border-border rounded py-2 text-sm hover:bg-bg-medium">
-                        View Project Context
-                     </button>
-                 </div>
-             </div>
+          <div className="w-96 bg-bg-light h-full shadow-xl p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-text-primary mb-4">Report Context</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-text-muted uppercase">Report Title</label>
+                  <p className="text-sm">{reportData?.title}</p>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-text-muted uppercase">Files</label>
+                    <ul className="list-disc list-inside text-sm">
+                      {reportData?.rawFiles.map(f => <li key={f.id}>{f.file_name}</li>)}
+                    </ul>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-text-muted uppercase">Specific Context</label>
+                  <div className="mt-1 p-3 bg-bg-medium rounded-md max-h-40 overflow-y-auto">
+                    <p className="text-sm text-text-secondary whitespace-pre-wrap">
+                      {reportData?.specificContext || "No specific context provided."}
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setModals(prev => ({ ...prev, viewContext: false, projectContext: true }))} className="w-full border border-border rounded py-2 text-sm hover:bg-bg-medium">
+                  View Project Context
+                </button>
+              </div>
+          </div>
         </div>
       )}
 
@@ -978,6 +1099,15 @@ const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [ke
           </div>
         </div>
       )}
+
+      {/* Unsaved Changes Modal */}
+      {blocker.state === "blocked" && (
+        <UnsavedChangesModal
+          isOpen={true}
+          onStay={() => blocker.reset()}
+          onLeave={() => blocker.proceed()}
+        />
+      )}      
     </div>
   );
 }

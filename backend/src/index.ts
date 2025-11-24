@@ -23,7 +23,10 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // --- 1. Middleware ---
-app.use(cors()); // Enable Cross-Origin Resource Sharing
+app.use(cors({
+  origin: true, // Allow all origins (or set to ["http://localhost:5173"] for stricter security)
+  exposedHeaders: ['Content-Disposition']
+}));
 app.use(express.json()); // Enable parsing of JSON request bodies
 
 // --- 2. Create HTTP & WebSocket Servers ---

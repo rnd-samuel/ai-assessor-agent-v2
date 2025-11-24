@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import apiService from '../services/apiService';
 import { useUserStore } from '../state/userStore';
 import LoadingButton from '../components/LoadingButton';
+import { useToastStore } from '../state/toastStore';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -14,6 +15,7 @@ export default function LoginPage() {
 
   // Get the 'setUser' action from our zustand store
   const setUser = useUserStore((state) => state.setUser);
+  const addToast = useToastStore((state) => state.addToast);
 
   // --- Handle Real Login ---
   const handleLogin = async (e: React.FormEvent) => {
@@ -57,10 +59,26 @@ export default function LoginPage() {
   // --- (FIXED) Handle Real Forgot Password ---
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    // (FR-AUTH-004) We'll build this endpoint later
-    // await apiService.post('/auth/forgot-password', { email });
-    console.log('Forgot password for:', email);
-    setView('success'); // Show the success message (U2)
+    
+    if (!email) {
+      addToast("Please enter your email address.", 'error');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      // Call the real endpoint
+      await apiService.post('/auth/forgot-password', { email });
+      
+      // On success (or if email doesn't exist but we pretend it does for security), show success view
+      setView('success'); 
+    } catch (error: any) {
+      console.error("Forgot Password Error:", error);
+      addToast(error.response?.data?.message || "Failed to request password reset.", 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // --- TSX for Rendering (No changes below) ---
@@ -162,7 +180,7 @@ export default function LoginPage() {
             type="submit" 
             className="w-full py-2.5"
             isLoading={isLoading}
-            loadingText="Logging In..."
+            loadingText="Sending..."
           >
             Send Reset Link
           </LoadingButton>

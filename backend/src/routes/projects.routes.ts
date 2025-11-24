@@ -2,9 +2,11 @@
 import { Router, Request } from 'express';
 import { authenticateToken, authorizeRole } from '../middleware/auth.middleware';
 import { query } from '../services/db';
-import { uploadToGCS } from '../services/storage';
+import { uploadToGCS, getSignedUrl } from '../services/storage';
 import multer from 'multer';
 import crypto from 'crypto';
+import { generateReportDocx } from '../services/document-service';
+import { extractDocxPlaceholders } from '../services/document-service';
 
 // Extend Request type to include 'user'
 interface AuthenticatedRequest extends Request {
@@ -25,9 +27,22 @@ const calculateHash = (buffer: Buffer): string => {
   return crypto.createHash('md5').update(buffer).digest('hex');
 };
 
+// Validation Regexes
+// 1. Static: overall_strength, overall_weakness, overall_development
+const STATIC_PATTERN = /^(overall_strength|overall_weakness|overall_development)$/;
+
+// 2. Dynamic Competency: [Name] + suffix
+// Suffixes: _level, _explanation, _development
+// OR KB: _[level]_[kb] + suffix (_fulfillment, _explanation)
+const DYNAMIC_PATTERN = /^\[[^\]]+\](_(level|explanation|development)|_(\d+|\[target_level\])_\d+_(fulfillment|explanation))$/;
+
+const validatePlaceholder = (p: string): boolean => {
+  return STATIC_PATTERN.test(p) || DYNAMIC_PATTERN.test(p);
+};
+
 // --- (FR-PROJ-001) Create New Project ---
 router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), async (req: AuthenticatedRequest, res) => {
-  const { name, userIds, prompts, dictionaryId, simulationMethodIds } = req.body;
+  const { name, userIds, prompts, dictionaryId, simulationFileIds, enableAnalysis, enableSummary } = req.body;
   const creatorId = req.user?.userId;
 
   if (!name || !prompts || !dictionaryId || !userIds) {
@@ -50,8 +65,10 @@ router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), a
     await query('BEGIN');
 
     const projectResult = await query(
-      "INSERT INTO projects (name, creator_id, dictionary_id) VALUES ($1, $2, $3) RETURNING id",
-      [name, creatorId, dictionaryId]
+      `INSERT INTO projects (name, creator_id, dictionary_id, enable_analysis, enable_summary) 
+       VALUES ($1, $2, $3, $4, $5) 
+       RETURNING id`,
+      [name, creatorId, dictionaryId, enableAnalysis ?? true, enableSummary ?? true]
     );
     const projectId = projectResult.rows[0].id;
 
@@ -66,8 +83,24 @@ router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), a
       await query("INSERT INTO project_users (project_id, user_id) VALUES ($1, $2)", [projectId, userId]);
     }
 
-    if (simulationMethodIds && Array.isArray(simulationMethodIds)) {
-      for (const methodId of simulationMethodIds) {
+    if (simulationFileIds && Array.isArray(simulationFileIds) && simulationFileIds.length > 0) {
+      const uniqueMethodIds = new Set<string>();
+
+      for (const fileId of simulationFileIds) {
+        await query("INSERT INTO projects_to_simulation_files (project_id, file_id) VALUES ($1, $2)", [projectId, fileId]);
+
+        const fileRes = await query("SELECT method_id FROM global_simulation_files WHERE id = $1", [fileId]);
+        if (fileRes.rows.length > 0) {
+          uniqueMethodIds.add(fileRes.rows[0].method_id);
+        }
+      }
+
+      for (const methodId of uniqueMethodIds) {
+        // Use ON CONFLICT DO NOTHING to avoid duplicates if multiple files share a method
+        // Note: projects_to_global_methods needs a unique constraint or we check first. 
+        // Since we are in a transaction and just created the project, checking existence is safe/easy, 
+        // but "INSERT ... ON CONFLICT" is better if supported. 
+        // Let's just do a simple check-then-insert loop for safety in this transaction.
         await query("INSERT INTO projects_to_global_methods (project_id, method_id) VALUES ($1, $2)", [projectId, methodId]);
       }
     }
@@ -156,6 +189,52 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
 });
 
 /**
+ * (NR-5.2)
+ * Edit Project via Context
+ */
+router.put('/:id', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id } = req.params;
+  const { name, userIds } = req.body;
+  const userId = req.user?.userId;
+
+  // Validation: Only creator can update
+  const proj = await query('SELECT creator_id FROM projects WHERE id = $1', [id]);
+  if (proj.rows.length === 0) return res.status(404).send({ message: "Project not found" });
+  if (proj.rows[0].creator_id !== userId) return res.status(403).send({ message: "Only the creator can edit this project." });
+
+  try {
+    await query('BEGIN');
+    
+    // 1. Update Name
+    if (name) {
+        await query('UPDATE projects SET name = $1 WHERE id = $2', [name, id]);
+    }
+
+    // 2. Update Users (Full Replace Strategy for simplicity)
+    if (userIds && Array.isArray(userIds)) {
+        // Remove old users (except creator) - Wait, creator isn't in project_users table in our schema?
+        // Actually, in `POST /`, we added creator to project_users.
+        // Let's just wipe and recreate, ensuring creator is always there.
+        
+        await query('DELETE FROM project_users WHERE project_id = $1', [id]);
+        
+        const allUsers = [...new Set([...userIds, userId])];
+        for (const uid of allUsers) {
+             await query("INSERT INTO project_users (project_id, user_id) VALUES ($1, $2)", [id, uid]);
+        }
+    }
+
+    await query('COMMIT');
+    res.send({ message: "Project updated successfully." });
+
+  } catch (error) {
+    await query('ROLLBACK');
+    console.error("Error updating project:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
  * (NR-6.2, NR-6.3)
  * Get the necessary data for filling out the "New Report" form.
  * This includes the project's competency dictionary and its simulation methods.
@@ -227,10 +306,15 @@ router.get('/:id/form-data', authenticateToken, async (req, res) => {
 router.post('/:id/upload', authenticateToken, authorizeRole('Admin', 'Project Manager'), upload.single('file'),
   async (req, res) => {
     const { id: projectId } = req.params;
-    const { fileType } = req.body; // 'template', 'knowledgeBase', 'simulationMethod'
+    const { fileType } = req.body; // 'template', 'knowledgeBase'
     const file = req.file;
 
     if (!file || !fileType) return res.status(400).send({ message: 'File or fileType missing.' });
+
+    // Validation: Ensure fileType is valid
+    if (!['template', 'knowledgeBase'].includes(fileType)) {
+        return res.status(400).send({ message: "Invalid file type." });
+    }
 
     try {
       // 1. Calculate Hash
@@ -258,8 +342,23 @@ router.post('/:id/upload', authenticateToken, authorizeRole('Admin', 'Project Ma
          VALUES ($1, $2, $3, $4, $5)`,
         [projectId, file.originalname, gcsPath, fileType, fileHash]
       );
+
+      let placeholders: string[] = [];
+
+      if (fileType === 'template') {
+        try {
+          placeholders = extractDocxPlaceholders(file.buffer);
+        } catch (err) {
+          console.error("Template analysis failed:", err);
+          return res.status(400).send({ message: "Invalid DOCX template. Could not parse placeholders." });
+        }
+      }
       
-      res.status(200).send({ message: 'File uploaded successfully.', filename: file.originalname });
+      res.status(200).send({ 
+        message: 'File uploaded successfully.', 
+        filename: file.originalname,
+        placeholders: placeholders
+      });
 
     } catch (error) {
       console.error('File upload failed:', error);
@@ -282,8 +381,8 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
     let sqlQuery = '';
     const params: any[] = [];
 
-    if (userRole === 'Admin' || userRole === 'Project Manager') {
-      // (P17) Admins/PMs see ALL reports for the project
+    if (userRole === 'Admin') {
+      // Admin sees ALL reports
       sqlQuery = `
          SELECT r.id, r.created_at, r.title, u.name as user_name, (r.creator_id = $1) as can_archive
          FROM reports r
@@ -291,8 +390,31 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
          WHERE r.project_id = $2 AND r.is_archived = false
       `;
       params.push(userId, projectId);
+    } else if (userRole === 'Project Manager') {
+      // Check if this PM is the CREATOR of the project
+      const projectCheck = await query('SELECT creator_id FROM projects WHERE id = $1', [projectId]);
+      const isProjectCreator = projectCheck.rows.length > 0 && projectCheck.rows[0].creator_id === userId;
+
+      if (isProjectCreator) {
+        sqlQuery = `
+           SELECT r.id, r.created_at, r.title, u.name as user_name, (r.creator_id = $1) as can_archive
+           FROM reports r
+           JOIN users u ON r.creator_id = u.id
+           WHERE r.project_id = $2 AND r.is_archived = false
+        `;
+        params.push(projectId, userId);
+      } else {
+      // PM is NOT Creator (just invivted): See ONLY OWN reports
+        sqlQuery = `
+           SELECT r.id, r.created_at, r.title, u.name as user_name, true as can_archive
+           FROM reports r
+           JOIN users u ON r.creator_id = u.id
+           WHERE r.project_id = $1 AND r.creator_id = $2 AND r.is_archived = false
+        `;
+        params.push(projectId, userId);
+      }
     } else {
-      // (U17) Users only see their OWN reports
+      // Normal User: See ONLY OWN reports
       sqlQuery = `
          SELECT r.id, r.created_at, r.title, u.name as user_name, true as can_archive
          FROM reports r
@@ -560,20 +682,64 @@ router.put('/:id/unarchive', authenticateToken, authorizeRole('Admin', 'Project 
 });
 
 /**
+ * (PD-3.8) Permanently Delete a Project
+ * Restriction: Admin Only, and Project must be Archived.
+ */
+router.delete('/:id', authenticateToken, authorizeRole('Admin'), async (req: AuthenticatedRequest, res) => {
+  const { id } = req.params;
+
+  try {
+    // 1. Safety Check: Is it archived?
+    const check = await query('SELECT is_archived FROM projects WHERE id = $1', [id]);
+    
+    if (check.rows.length === 0) {
+      return res.status(404).send({ message: "Project not found." });
+    }
+    
+    if (!check.rows[0].is_archived) {
+      return res.status(400).send({ message: "Cannot delete an active project. Archive it first." });
+    }
+
+    // 2. Perform Delete (Cascade will handle reports, files, etc. if schema is set up right)
+    await query('DELETE FROM projects WHERE id = $1', [id]);
+    
+    res.send({ message: "Project permanently deleted." });
+
+  } catch (error) {
+    console.error("Error deleting project:", error);
+    res.status(500).send({ message: "Internal server error." });
+  }
+});
+
+/**
  * (NP-4.5) Get all available global simulation methods
  * Used by the NewProjectPage to populate the multi-select
  */
-router.get('/available-simulation-methods', authenticateToken, async (req, res) => {
+router.get('/available-simulation-files', authenticateToken, async (req, res) => {
   try {
-    // This reads the REAL data from your database.
-    const result = await query(
-      'SELECT id, name FROM global_simulation_methods ORDER BY name'
-    );
+    const result = await query(`
+      SELECT f.id, f.file_name, m.name as method_name, m.id as method_id
+      FROM global_simulation_files f
+      JOIN global_simulation_methods m ON f.method_id = m.id
+      ORDER BY m.name, f.file_name
+    `);
     res.status(200).json(result.rows);
-
   } catch (error) {
-    console.error('Error fetching simulation methods:', error);
+    console.error('Error fetching simulation files:', error);
     res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * (NP-4.6) Get default prompts
+ */
+router.get('/defaults/prompts', authenticateToken, async (req, res) => {
+  try {
+    const result = await query("SELECT value FROM system_settings WHERE key = 'default_prompts'");
+    res.json(result.rows[0]?.value || {});
+  } catch (error) {
+    console.error("Error fetching default prompts:", error);
+    res.status(500).send({ message: "Internal server error" });
   }
 });
 
@@ -587,7 +753,7 @@ router.get('/available-users', authenticateToken, async (req: AuthenticatedReque
   try {
     // Fetch all users *except* the user creating the project
     const result = await query(
-      'SELECT id, email FROM users WHERE id != $1 ORDER BY email',
+      'SELECT id, email, name FROM users WHERE id != $1 ORDER BY email',
       [currentUserId]
     );
     res.status(200).json(result.rows);
@@ -611,6 +777,7 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
          p.name as project_name,
          p.dictionary_id,
          u.email as creator_email,
+         u.name as creator_name,
          cd.name as dictionary_name,
          pp.general_context
        FROM projects p
@@ -638,26 +805,51 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
     const simMethods = globalMethods.rows.map(r => r.name);
 
     // 3. Get file-based data (Report Template, KB Files)
-    //    We will query the (not-yet-implemented) project_files table.
-    //    For now, this will correctly return empty arrays.
+    const filesResult = await query(
+      `SELECT file_name, gcs_path, file_type 
+       FROM project_files 
+       WHERE project_id = $1`,
+      [projectId]
+    );
 
-    // TODO: Implement a 'project_files' table and query it here.
-    const reportTemplateResult = { rows: [] as any[] };
-    const knowledgeBaseResult = { rows: [] as any[] };
+    let reportTemplate = null;
+    const knowledgeBaseFiles = [];
 
-    const reportTemplate = reportTemplateResult.rows.length > 0 ? {
-      name: reportTemplateResult.rows[0].file_name,
-      url: reportTemplateResult.rows[0].gcs_url
-    } : null;
-    const knowledgeBaseFiles = knowledgeBaseResult.rows.map(f => ({
-      name: f.file_name,
-      url: f.gcs_url
-    }));
+    for (const file of filesResult.rows) {
+        // Format: "ProjectTitle - FileName"
+        const customName = `${projectData.project_name} - ${file.file_name}`;
 
-    // 4. Assemble and send response
+        // Generate a signed URL for secure access (valid for 15 mins)
+        const signedUrl = await getSignedUrl(file.gcs_path);
+
+        const fileObj = {
+            name: file.file_name,
+            url: signedUrl
+        };
+
+        if (file.file_type === 'template') {
+            reportTemplate = fileObj;
+        } else if (file.file_type === 'knowledgeBase') {
+            knowledgeBaseFiles.push(fileObj);
+        }
+    }
+
+    // 4. Get invited users
+    const usersResult = await query(
+      `SELECT u.id, u.email, u.name
+       FROM project_users pu
+       JOIN users u ON pu.user_id = u.id
+       WHERE pu.project_id = $1`,
+      [projectId]
+    );
+    const invitedUsers = usersResult.rows;
+
+    // 5. Assemble and send response
     res.status(200).json({
       projectName: projectData.project_name,
-      projectManager: projectData.creator_email,
+      projectManager: projectData.creator_name || projectData.creator_email,
+      projectManagerEmail: projectData.creator_email,
+      invitedUsers: usersResult.rows,
       reportTemplate: reportTemplate,
       knowledgeBaseFiles: knowledgeBaseFiles,
       dictionaryTitle: projectData.dictionary_name || 'N/A',
@@ -694,6 +886,39 @@ router.get('/dictionary/:id/content', authenticateToken, async (req: Authenticat
   } catch (error) {
     console.error("Error fetching dictionary content:", error);
     res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * Analyze a template file without saving it.
+ */
+router.post('/analyze-template', authenticateToken, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).send({ message: "No file provided." });
+  
+  try {
+    // 1. Extract all text inside { }
+    const allPlaceholders = extractDocxPlaceholders(req.file.buffer);
+    
+    // 2. Filter Validity
+    const validPlaceholders: string[] = [];
+    const invalidPlaceholders: string[] = [];
+
+    allPlaceholders.forEach(p => {
+      if (validatePlaceholder(p)) {
+        validPlaceholders.push(p);
+      } else {
+        invalidPlaceholders.push(p);
+      }
+    });
+
+    res.json({ 
+      placeholders: allPlaceholders, 
+      invalidPlaceholders // <-- Send this back
+    });
+
+  } catch (error) {
+    console.error("Analysis error:", error);
+    res.status(400).send({ message: "Failed to analyze template." });
   }
 });
 

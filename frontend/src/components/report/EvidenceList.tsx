@@ -2,6 +2,7 @@
 import { useState, useMemo } from 'react';
 import EvidenceCard, { type EvidenceCardData } from './EvidenceCard';
 import LoadingButton from '../LoadingButton';
+import { useToastStore } from '../../state/toastStore';
 import * as XLSX from 'xlsx';
 
 // Data Format Helper
@@ -55,6 +56,8 @@ export default function EvidenceList({
     level: '',
     source: '',
   });
+
+  const addToast = useToastStore((state) => state.addToast);
 
   const [isSkipModalOpen, setIsSkipModalOpen] = useState(false);
   const [isGenEvidenceLoading, setIsGenEvidenceLoading] = useState(false);
@@ -125,7 +128,7 @@ export default function EvidenceList({
       // If status is CREATED, it means AI generation hasn't run/finished
 
       if (evidence.length === 0) {
-        alert("Please collect at least one piece of evidence before proceeding.");
+        addToast('Please collect at least one piece of evidence before proceeding.', 'info');
         return;
       }
 
@@ -253,37 +256,40 @@ export default function EvidenceList({
       {/* Scrollable List */}
       <div className="flex-grow overflow-y-auto p-4 space-y-4 bg-bg-medium/30">
         {filteredEvidence.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-center text-text-muted border-2 border-dashed border-border rounded-lg bg-bg-light/50">
-                {reportStatus === 'CREATED' ? (
-                  <div className="max-w-xs space-y-4">
-                    <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto text-primary">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    </div>
-                    <h3 className="text-lg font-semibold text-text-primary">Ready to Assess</h3>
-                    <p className="text-sm">
-                      You can manually highlight text on the left to create evidence, or let the AI find it for you.
-                    </p>
-                    <LoadingButton
-                      onClick={handleGenerateEvidence}
-                      isLoading={isGenEvidenceLoading}
-                      loadingText="Generating..."
-                      disabled={isViewOnly}
-                      className="bg-gradient-to-r from-indigo-500 to-purple-600 border-none hover:from-indigo-600 hover:to-purple-700 text-white shadow-sm mx-auto"
-                      icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/><path d="m12 8-2.5 3 1.5 4.5"/><path d="m17.5 8-2.5 3 1.5 4.5"/><path d="m7 8-2.5 3 1.5 4.5"/></svg>}
-                    >
-                      Start AI Generation
-                    </LoadingButton>
-                  </div>
-                ) : reportStatus === 'PROCESSING' ? (
-                  <div>
-                    <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
-                    <p>AI is analyzing documents...</p>
-                  </div>
-                ) : (
-                  <p>No evidence matches your filters.</p>
-                )}
+        <div className="flex flex-col items-center justify-center h-64 text-center text-text-muted border-2 border-dashed border-border rounded-lg bg-bg-light/50">
+          
+          {/* PRIORITY: Check loading first to prevent blink */}
+          {(reportStatus === 'PROCESSING' || isGenEvidenceLoading) ? (
+            <div className="animate-fade-in">
+              <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
+              <p className="text-text-primary font-medium">AI is analyzing documents...</p>
+              <p className="text-xs text-text-muted mt-1">This may take a minute.</p>
             </div>
-        ) : (
+          ) : reportStatus === 'CREATED' ? (
+            <div className="max-w-xs space-y-4 animate-fade-in">
+              <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto text-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              </div>
+              <h3 className="text-lg font-semibold text-text-primary">Ready to Assess</h3>
+              <p className="text-sm">
+                You can manually highlight text on the left to create evidence, or let the AI find it for you.
+              </p>
+              <LoadingButton
+                onClick={handleGenerateEvidence}
+                isLoading={isGenEvidenceLoading}
+                loadingText="Starting..."
+                disabled={isViewOnly}
+                className="bg-gradient-to-r from-indigo-500 to-purple-600 border-none hover:from-indigo-600 hover:to-purple-700 text-white shadow-sm mx-auto"
+                icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/><path d="m12 8-2.5 3 1.5 4.5"/><path d="m17.5 8-2.5 3 1.5 4.5"/><path d="m7 8-2.5 3 1.5 4.5"/></svg>}
+              >
+                Start AI Generation
+              </LoadingButton>
+            </div>
+          ) : (
+            <p>No evidence matches your filters.</p>
+          )}
+        </div>
+      ) : (
             filteredEvidence.map((ev) => (
             <EvidenceCard
                 key={ev.id}

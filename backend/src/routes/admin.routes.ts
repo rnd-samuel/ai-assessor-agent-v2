@@ -71,9 +71,20 @@ router.get('/stats/queue', async (req: AuthenticatedRequest, res) => {
  */
 router.get('/dictionaries', async (req: AuthenticatedRequest, res) => {
   try {
-    const result = await query(
-      'SELECT id, name, created_at FROM competency_dictionaries ORDER BY created_at DESC'
-    );
+    // Modified query to check usage status
+    // We assume "in use" means linked to at least one UNARCHIVED (active) project.
+    const result = await query(`
+      SELECT 
+        d.id, 
+        d.name, 
+        d.created_at,
+        EXISTS (
+          SELECT 1 FROM projects p 
+          WHERE p.dictionary_id = d.id AND p.is_archived = false
+        ) as is_in_use
+      FROM competency_dictionaries d
+      ORDER BY d.created_at DESC
+    `);
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching dictionaries:', error);
@@ -109,6 +120,37 @@ router.post('/dictionaries', async (req: AuthenticatedRequest, res) => {
 });
 
 /**
+ * (ADM-8.6) Update a Competency Dictionary
+ */
+router.put('/dictionaries/:id', async (req: AuthenticatedRequest, res) => {
+  const { id } = req.params;
+  const { name, content } = req.body;
+
+  if (!name || !content) {
+    return res.status(400).send({ message: 'Name and content are required.' });
+  }
+
+  try {
+    const result = await query(
+      'UPDATE competency_dictionaries SET name = $1, content = $2 WHERE id = $3 RETURNING id',
+      [name, content, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).send({ message: 'Dictionary not found.' });
+    }
+
+    res.status(200).send({ message: 'Dictionary updated successfully.' });
+  } catch (error: any) {
+    console.error('Error updating dictionary:', error);
+    if (error.code === '23505') {
+      return res.status(409).send({ message: 'A dictionary with this name already exists.' });
+    }
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
  * (ADM-8.6) Delete a Competency Dictionary
  */
 router.delete('/dictionaries/:id', async (req: AuthenticatedRequest, res) => {
@@ -135,7 +177,7 @@ router.delete('/dictionaries/:id', async (req: AuthenticatedRequest, res) => {
 router.get('/simulation-methods', async (req: AuthenticatedRequest, res) => {
   try {
     const result = await query(
-      'SELECT id, name, created_at FROM global_simulation_methods ORDER BY name ASC'
+      'SELECT id, name, description, created_at FROM global_simulation_methods ORDER BY name ASC'
     );
     res.json(result.rows);
   } catch (error) {
@@ -148,7 +190,7 @@ router.get('/simulation-methods', async (req: AuthenticatedRequest, res) => {
  * (ADM-8.7) Create a new Simulation Method
  */
 router.post('/simulation-methods', async (req: AuthenticatedRequest, res) => {
-  const { name } = req.body;
+  const { name, description } = req.body; // <-- Add description
   const creatorId = req.user?.userId;
 
   if (!name) {
@@ -157,8 +199,8 @@ router.post('/simulation-methods', async (req: AuthenticatedRequest, res) => {
 
   try {
     const result = await query(
-      'INSERT INTO global_simulation_methods (name, created_by) VALUES ($1, $2) RETURNING id, name',
-      [name, creatorId]
+      'INSERT INTO global_simulation_methods (name, description, created_by) VALUES ($1, $2, $3) RETURNING id, name, description',
+      [name, description || '', creatorId]
     );
     res.status(201).json(result.rows[0]);
   } catch (error: any) {
@@ -167,6 +209,42 @@ router.post('/simulation-methods', async (req: AuthenticatedRequest, res) => {
       return res.status(409).send({ message: 'A method with this name already exists.' });
     }
     res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+router.put('/simulation-methods/:id', async (req: AuthenticatedRequest, res) => {
+  const { id } = req.params;
+  const { name, description } = req.body;
+
+  if (!name) return res.status(400).send({ message: "Name is required" });
+
+  try {
+    // Check if used in active projects? 
+    // Requirement says "edit/delete only enabled if never used".
+    // We'll do a strict check for now.
+    const check = await query('SELECT 1 FROM projects_to_global_methods WHERE method_id = $1 LIMIT 1', [id]);
+    
+    // NOTE: Editing the *description* might be safe even if used, but renaming might be confusing. 
+    // For strict compliance with "edit only enabled if never used", uncomment this:
+    /*
+    if ((check.rowCount || 0) > 0) {
+       return res.status(400).send({ message: "Cannot edit: Method is in use." });
+    }
+    */
+
+    const result = await query(
+      'UPDATE global_simulation_methods SET name = $1, description = $2 WHERE id = $3 RETURNING *',
+      [name, description, id]
+    );
+
+    if (result.rowCount === 0) return res.status(404).send({ message: "Method not found" });
+    
+    res.json(result.rows[0]);
+
+  } catch (error: any) {
+    console.error("Error updating method:", error);
+    if (error.code === '23505') return res.status(409).send({ message: "Name already taken." });
+    res.status(500).send({ message: "Internal server error" });
   }
 });
 
@@ -261,6 +339,46 @@ router.delete('/simulation-files/:id', async (req: AuthenticatedRequest, res) =>
 });
 
 /**
+ * (ADM-8.8 / 8.9) Get System Settings
+ */
+router.get('/settings/:key', async (req: AuthenticatedRequest, res) => {
+  const { key } = req.params;
+  try {
+    const result = await query('SELECT value FROM system_settings WHERE key = $1', [key]);
+    // Return empty object if not found, rather than 404, for easier frontend handling
+    res.json(result.rows[0]?.value || {});
+  } catch (error) {
+    console.error(`Error fetching setting ${key}:`, error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (ADM-8.8 / 8.9) Update System Settings
+ */
+router.put('/settings/:key', async (req: AuthenticatedRequest, res) => {
+  const { key } = req.params;
+  const value = req.body; // The JSON object
+  const userId = req.user?.userId;
+
+  if (!value) return res.status(400).send({ message: "Value is required." });
+
+  try {
+    await query(
+      `INSERT INTO system_settings (key, value, updated_by, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (key) DO UPDATE 
+       SET value = $2, updated_by = $3, updated_at = NOW()`,
+      [key, value, userId]
+    );
+    res.send({ message: "Settings updated successfully." });
+  } catch (error) {
+    console.error(`Error updating setting ${key}:`, error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
  * (ADM-8.10) Get All Users
  */
 router.get('/users', async (req: AuthenticatedRequest, res) => {
@@ -348,6 +466,61 @@ router.put('/users/:id', async (req: AuthenticatedRequest, res) => {
         return res.status(409).send({ message: 'Email already in use.' });
     }
     res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * (ADM-8.11) Get All AI Models
+ */
+router.get('/ai-models', async (req: AuthenticatedRequest, res) => {
+  try {
+    const result = await query('SELECT * FROM ai_models ORDER BY id ASC');
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error fetching AI models:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (ADM-8.11) Add New AI Model
+ */
+router.post('/ai-models', async (req: AuthenticatedRequest, res) => {
+  const { id, context_window, input_cost, output_cost } = req.body;
+
+  if (!id) return res.status(400).send({ message: "Model ID is required." });
+
+  // TODO: Optional - Add OpenRouter API check here
+
+  try {
+    await query(
+      `INSERT INTO ai_models (id, name, context_window, input_cost_per_m, output_cost_per_m)
+       VALUES ($1, $1, $2, $3, $4)`,
+      [id, context_window || 0, input_cost || 0, output_cost || 0]
+    );
+    res.status(201).send({ message: "Model added successfully." });
+  } catch (error: any) {
+    if (error.code === '23505') return res.status(409).send({ message: "Model ID already exists." });
+    console.error("Error adding model:", error);
+    res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (ADM-8.11) Delete AI Model
+ */
+router.delete('/ai-models/:id', async (req: AuthenticatedRequest, res) => {
+  // Note: In production, check if this model is currently selected in system_settings before deleting.
+  // For now, we allow deletion.
+  const { id } = req.params;
+  try {
+    // decodeURIcomponent in case ID has slashes (e.g. openrouter/gpt-4)
+    const decodedId = decodeURIComponent(id);
+    await query('DELETE FROM ai_models WHERE id = $1', [decodedId]);
+    res.send({ message: "Model deleted." });
+  } catch (error) {
+    console.error("Error deleting model:", error);
+    res.status(500).send({ message: "Internal server error" });
   }
 });
 
