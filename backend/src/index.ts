@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import http from 'http';
 import { Server } from 'socket.io';
+import { createClient } from 'redis';
 import { setupQueue, aiGenerationQueue, aiGenerationQueueEvents } from './services/queue';
 import { setupSocket, getIO } from './services/socket';
 import authRoutes from './routes/auth.routes';
@@ -42,94 +43,116 @@ const io = new Server(httpServer, {
   }
 });
 
+// --- Redis Subscriber for Worker Events ---
+const setupWorkerBridge = async () => {
+  if (!process.env.UPSTASH_REDIS_URL) {
+    console.warn("⚠️ UPSTASH_REDIS_URL missing. Worker notifications will not reach frontend.");
+    return;
+  }
+
+  const subClient = createClient({ url: process.env.UPSTASH_REDIS_URL });
+  subClient.on('error', (err) => console.error('[Bridge] Redis Client Error', err));
+  await subClient.connect();
+
+  // Subscribe to a dedicated channel for worker notifications
+  await subClient.subscribe('worker-events', (message) => {
+    try {
+      const event = JSON.parse(message);
+      
+      // Forward to specific user via Socket.io
+      if (event.userId && event.type) {
+        // io.to(userId) works because we joined the room in socket.ts
+        getIO().to(event.userId).emit(event.type, event.payload);
+        console.log(`[Bridge] Forwarded ${event.type} to user ${event.userId}`);
+      }
+    } catch (e) {
+      console.error('[Bridge] Failed to parse worker message:', e);
+    }
+  });
+  
+  console.log('✅ Main Server subscribed to worker events');
+};
+
 // --- 3. Initialize Services ---
-setupSocket(io); // Make the 'io' instance available to other files
-setupQueue(); // Connect to Redis and initialize queues
+const startServer = async () => {
+  try {
+    await setupSocket(io); // Make the 'io' instance available to other files
+    await setupWorkerBridge();
+    setupQueue(); // Connect to Redis and initialize queues
 
 // Notification bridge
-aiGenerationQueueEvents.on('completed', async (args: { jobId: string, returnvalue: any }) => {
-  console.log(`[Queue Events] Job ${args.jobId} completed.`);
-  try {
-    // 1. Fetch the job from the queue using its ID
-    const job = await aiGenerationQueue.getJob(args.jobId) as Job<AiJobData> | undefined;
+    aiGenerationQueueEvents.on('completed', async (args: { jobId: string, returnvalue: any }) => {
+      console.log(`[Queue Events] Job ${args.jobId} completed.`);
+      try {
+        // 1. Fetch the job from the queue using its ID
+        const job = await aiGenerationQueue.getJob(args.jobId) as Job<AiJobData> | undefined;
 
-    // 2. Now you can safely check 'if (job)'
-    if (job) {
-      const { userId, reportId } = job.data;
-      if (userId && reportId) {
-        getIO().to(userId).emit('generation-complete', {
-          reportId: reportId,
-          phase: 1,
-          status: 'COMPLETED',
-          message: 'Evidence list has finished generating.'
-        });
+        // 2. Now you can safely check 'if (job)'
+        if (job && job.name.startsWith('generate-phase')) {
+          const { userId, reportId } = job.data;
+          if (userId && reportId) {
+            getIO().to(userId).emit('generation-complete', {
+              reportId: reportId,
+              phase: 1, // Simplified, ideally derive from job name
+              status: 'COMPLETED',
+              message: 'Generation task completed.'
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`[Queue Events] Error handling completion for ${args.jobId}:`, error);
       }
-    }
-  } catch (error) {
-    console.error(`[Queue Events] Error fetching completed job ${args.jobId}:`, error);
-  }
-});
+    });
 
-aiGenerationQueueEvents.on('failed', async (args: { jobId: string, failedReason: string }, id: string) => {
-  console.log(`[Queue Events] Job ${args.jobId} failed: ${args.failedReason}`);
-  try {
-    // 1. Fetch the job from the queue using its ID
-    const job = await aiGenerationQueue.getJob(args.jobId) as Job<AiJobData> | undefined;
+    aiGenerationQueueEvents.on('failed', async (args: { jobId: string, failedReason: string }, id: string) => {
+      console.log(`[Queue Events] Job ${args.jobId} failed: ${args.failedReason}`);
+      try {
+        // 1. Fetch the job from the queue using its ID
+        const job = await aiGenerationQueue.getJob(args.jobId) as Job<AiJobData> | undefined;
 
-    // 2. This is the block you were asking about! Now 'job' is defined.
-    if (job) {
-      const { userId, reportId } = job.data;
-      
-      // 'err.message' is now 'args.failedReason'
-      const errMessage = args.failedReason;
+        // 2. This is the block you were asking about! Now 'job' is defined.
+        if (job) {
+          const { userId, reportId } = job.data;
 
-      if (userId && reportId) {
-        getIO().to(userId).emit('generation-failed', {
-          reportId: reportId,
-          phase: 1,
-          status: 'FAILED',
-          message: `Evidence generation failed: ${errMessage}`
-        });
+          if (userId && reportId) {
+            getIO().to(userId).emit('generation-failed', {
+              reportId: reportId,
+              phase: 1,
+              status: 'FAILED',
+              message: `Generation failed: ${args.failedReason}`
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`[Queue Events] Error fetching failed job ${args.jobId}:`, error);
       }
-    }
-  } catch (error) {
-    console.error(`[Queue Events] Error fetching failed job ${args.jobId}:`, error);
+    });
+
+    // --- 4. API Routes (We will build these out next) ---
+    app.use('/api/auth', authRoutes);
+    app.use('/api/projects', projectsRoutes);
+    app.use('/api/reports', reportsRoutes);
+    app.use('/api/admin', adminRoutes);
+
+    app.get('/', (req, res) => {
+      res.send('AI Assessor Agent API is running!');
+    });
+
+    // Example: A test route to add a job to the queue
+    app.post('/api/test-job', async (req, res) => {
+      console.log('Adding test job to queue...');
+      await aiGenerationQueue.add('test-job', { data: "This is a test" });
+      res.status(202).send({ message: "Test job added to queue." });
+    });
+
+    // --- 5. Start The Server ---
+    httpServer.listen(port, () => {
+      console.log(`🚀 Server with WebSockets listening on http://localhost:${port}`);
+    });
+
+  } catch (err) {
+    console.error("Failed to start server:", err);
   }
-});
+};
 
-// --- 4. API Routes (We will build these out next) ---
-app.use('/api/auth', authRoutes);
-app.use('/api/projects', projectsRoutes);
-app.use('/api/reports', reportsRoutes);
-app.use('/api/admin', adminRoutes);
-
-app.get('/api/protected-test', authenticateToken, (req: any, res) => {
-  res.send({
-    message: "Success! You are authenticated.",
-    user: req.user
-  });
-});
-
-// This route is protected. You must be an 'Admin'.
-app.get('/api/admin-test', authenticateToken, authorizeRole('Admin'), (req: any, res) => {
-  res.send({
-    message: "Success! You are an Admin.",
-    user: req.user
-  });
-});
-
-app.get('/', (req, res) => {
-  res.send('AI Assessor Agent API is running!');
-});
-
-// Example: A test route to add a job to the queue
-app.post('/api/test-job', async (req, res) => {
-  console.log('Adding test job to queue...');
-  await aiGenerationQueue.add('test-job', { data: "This is a test" });
-  res.status(202).send({ message: "Test job added to queue." });
-});
-
-// --- 5. Start The Server ---
-httpServer.listen(port, () => {
-  console.log(`🚀 Server with WebSockets listening on http://localhost:${port}`);
-});
+startServer();

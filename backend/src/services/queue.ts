@@ -36,3 +36,16 @@ export const setupQueue = () => {
 
 
 };
+
+export const addAiGenerationJob = async (data: any) => {
+  return await aiGenerationQueue.add(data.jobName, data, {
+    // NEW CONFIGURATION:
+    attempts: 6, // Total tries: 3 for Main + 3 for Backup
+    backoff: {
+      type: 'exponential', // Wait longer between each retry (2s, 4s, 8s...)
+      delay: 2000, // Start with 2 seconds
+    },
+    removeOnComplete: true,
+    removeOnFail: false, // Keep failed jobs for debugging
+  });
+};

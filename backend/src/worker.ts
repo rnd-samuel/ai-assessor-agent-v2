@@ -5,6 +5,7 @@ import { URL } from 'url';
 import { runPhase1Generation } from './services/ai-phase1-service';
 import { runPhase2Generation } from './services/ai-phase2-service';
 import { runPhase3Generation } from './services/ai-phase3-service';
+import { processProjectFile, processReportFile } from './services/file-ingestion-service';
 
 // 1. Get Upstash Connection Details
 if (!process.env.UPSTASH_REDIS_URL) {
@@ -18,15 +19,14 @@ const connection = {
   tls: { servername: upstashUrl.hostname }
 };
 
-// 2. Create the Worker
-console.log('🤖 AI Worker is starting...');
+console.log('🤖 AI Workers are starting...');
 
-const worker = new Worker('ai-generation', async (job) => {
-
+// --- Worker 1: AI Generation Queue ---
+const aiWorker = new Worker('ai-generation', async (job) => {
   const userId = job.data.userId || 'unknown-user';
 
   if (job.name === 'generate-phase-1') {
-    return runPhase1Generation(job.data.reportId, userId);
+    return runPhase1Generation(job.data.reportId, userId, job);
   }
 
   if (job.name === 'generate-phase-2') {
@@ -36,15 +36,39 @@ const worker = new Worker('ai-generation', async (job) => {
   if (job.name === 'generate-phase-3') {
     return runPhase3Generation(job.data.reportId, userId);
   }
+}, { 
+  connection,
+  lockDuration: 60000
+});
+
+aiWorker.on('completed', (job) => {
+  console.log(`✅ [AI] Job ${job.id} (${job.name}) completed.`);
+});
+
+aiWorker.on('failed', (job, err) => {
+  console.error(`🚨 [AI] Job ${job?.id} (${job?.name}) failed:`, err.message);
+});
+
+// --- Worker 2: File Ingestion Queue ---
+const ingestionWorker = new Worker('file-ingestion', async (job) => {
+  
+  if (job.name === 'process-project-file') {
+    return processProjectFile(job.data);
+  }
+  
+  // Add this block:
+  if (job.name === 'process-report-file') {
+    return processReportFile(job.data);
+  }
 
 }, { connection });
 
-worker.on('completed', (job) => {
-  console.log(`✅ Job ${job.id} (Name: ${job.name}) has completed.`);
+ingestionWorker.on('completed', (job) => {
+  console.log(`✅ [Ingestion] Job ${job.id} (${job.name}) completed.`);
 });
 
-worker.on('failed', (job, err) => {
-  console.error(`🚨 Job ${job?.id} (Name: ${job?.name}) failed with error:`, err.message);
+ingestionWorker.on('failed', (job, err) => {
+  console.error(`🚨 [Ingestion] Job ${job?.id} (${job?.name}) failed:`, err.message);
 });
 
-console.log('🤖 AI Worker is listening for jobs...');
+console.log('🤖 AI Workers are listening for jobs...');

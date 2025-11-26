@@ -2,8 +2,9 @@
 import { useState, useMemo } from 'react';
 import EvidenceCard, { type EvidenceCardData } from './EvidenceCard';
 import LoadingButton from '../LoadingButton';
-import { useToastStore } from '../../state/toastStore';
+import ThinkingPanel from './ThinkingPanel';
 import * as XLSX from 'xlsx';
+import { useToastStore } from '../../state/toastStore';
 
 // Data Format Helper
 const formatDateToDDMMYY = (date: Date) => {
@@ -28,8 +29,14 @@ interface EvidenceListProps {
   onDelete: (id: string) => void;
   onCreate: () => void;
   reportStatus: 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+  targetPhase: number;
+  isThinking: boolean;
+  streamLog: string;
+
   onGeneratePhase1: () => void;
   onGenerateNext: () => void;
+  onReset: () => void;
 }
 
 export default function EvidenceList({
@@ -39,15 +46,19 @@ export default function EvidenceList({
   activeEvidenceId,
   isViewOnly,
   reportTitle,
-  isWaitingForSelection = false, // Default false
+  isWaitingForSelection = false,
   onCancelCreate,
   onHighlight,
   onEdit,
   onDelete,
   onCreate,
   reportStatus,
+  targetPhase,
+  isThinking,
+  streamLog,
   onGeneratePhase1,
   onGenerateNext,
+  onReset,
 }: EvidenceListProps) {
   // --- Filter State ---
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -92,6 +103,19 @@ export default function EvidenceList({
       );
     });
   }, [evidence, filters]);
+
+  // 1. Robust Map using NAMES as keys (since AI outputs Names)
+  const competencyNames = useMemo(() => {
+    const names: string[] = [];
+    if (dictionary?.kompetensi) {
+      dictionary.kompetensi.forEach((c: any) => {
+        // Prefer 'name', fallback to 'namaKompetensi'
+        const name = c.name || c.namaKompetensi;
+        if (name) names.push(name);
+      });
+    }
+    return names.sort();
+  }, [dictionary]);
 
   // --- Export Logic ---
   const handleExport = () => {
@@ -152,7 +176,7 @@ export default function EvidenceList({
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
       {/* Header & Filters */}
       <div className="flex-shrink-0 p-4 border-b border-border bg-bg-light sticky top-0 z-10">
         <div className="flex justify-between items-center mb-4">
@@ -184,8 +208,8 @@ export default function EvidenceList({
                         onChange={(e) => setFilters({ ...filters, competency: e.target.value })}
                       >
                         <option value="">All</option>
-                        {Array.from(competencyMap.entries()).map(([id, name]) => (
-                          <option key={id} value={id}>{name}</option>
+                        {competencyNames.map((name) => (
+                          <option key={name} value={name}>{name}</option>
                         ))}
                       </select>
                     </div>
@@ -225,7 +249,7 @@ export default function EvidenceList({
                 )}
              </div>
 
-             {reportStatus === 'CREATED' && (
+             {(reportStatus === 'CREATED' || reportStatus === 'FAILED' || evidence.length === 0) && (
                 <LoadingButton
                   onClick={handleGenerateEvidence}
                   isLoading={isGenEvidenceLoading}
@@ -234,7 +258,7 @@ export default function EvidenceList({
                   className="bg-gradient-to-r from-indigo-500 to-purple-600 border-none hover:from-indigo-600 hover:to-purple-700 text-white shadow-sm"
                   icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/><path d="m12 8-2.5 3 1.5 4.5"/><path d="m17.5 8-2.5 3 1.5 4.5"/><path d="m7 8-2.5 3 1.5 4.5"/></svg>}
                 >
-                  Generate Evidence
+                  {reportStatus === 'FAILED' ? 'Retry AI Generation' : 'Generate Evidence'}
                 </LoadingButton>
              )}
 
@@ -260,10 +284,17 @@ export default function EvidenceList({
           
           {/* PRIORITY: Check loading first to prevent blink */}
           {(reportStatus === 'PROCESSING' || isGenEvidenceLoading) ? (
-            <div className="animate-fade-in">
+            <div className="animate-fade-in flex flex-col items-center">
               <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
               <p className="text-text-primary font-medium">AI is analyzing documents...</p>
               <p className="text-xs text-text-muted mt-1">This may take a minute.</p>
+
+              <button
+                onClick={onReset}
+                className="mt-6 text-xs text-text-muted hover:text-error underline transition-colors"
+              >
+                Taking too long? Click here to Reset.
+              </button>
             </div>
           ) : reportStatus === 'CREATED' ? (
             <div className="max-w-xs space-y-4 animate-fade-in">
@@ -290,42 +321,66 @@ export default function EvidenceList({
           )}
         </div>
       ) : (
-            filteredEvidence.map((ev) => (
+        <>
+          {filteredEvidence.map((ev) => (
             <EvidenceCard
-                key={ev.id}
-                evidence={ev}
-                dictionary={dictionary}
-                isActive={activeEvidenceId === ev.id}
-                isViewOnly={isViewOnly}
+              key={ev.id}
+              evidence={ev}
+              dictionary={dictionary}
+              isActive={activeEvidenceId === ev.id}
+              isViewOnly={isViewOnly}
                 onClick={() => onHighlight(ev)}
                 onEdit={onEdit}
                 onDelete={onDelete}
             />
-            ))
-        )}
+          ))}
+          {reportStatus === 'PROCESSING' && (
+            <div className="w-full p-4 rounded-lg border-2 border-dashed border-primary/30 bg-primary/5 flex flex-col items-center justify-center animate-pulse mt-4">
+              <div className="flex items-center gap-2 text-primary font-semibold">
+                <div className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full"></div>
+                <span>Analyzing next competency...</span>
+              </div>
+              <p className="text-xs text-text-muted mt-1">More evidence is being generated.</p>
+              {/* We also add the reset button here in case it gets stuck with partial data */}
+              <button onClick={onReset} className="mt-2 text-[10px] text-text-muted hover:text-error underline">Reset Status</button>
+            </div>
+          )}
+        </>
+      )}
       </div>
 
       {/* Footer Actions */}
       <div className="p-4 border-t border-border bg-bg-light flex justify-between items-center">
-         <button
-            onClick={handleExport}
-            className="text-sm text-text-secondary hover:text-primary font-medium flex items-center gap-2"
-         >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Export List
-         </button>
+        <button
+          onClick={handleExport}
+          className="text-sm text-text-secondary hover:text-primary font-medium flex items-center gap-2"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export List
+        </button>
 
-         {!isViewOnly && (
-             <LoadingButton
-                onClick={handleNextClick}
-                isLoading={isNextPhaseLoading}
-                loadingText="Processing..."
-                disabled={evidence.length === 0}
-             >
-                Generate Next Phase &rarr;
-             </LoadingButton>
-         )}
+        {!isViewOnly && targetPhase > 1 && reportStatus !== 'PROCESSING' && (
+          <LoadingButton
+            onClick={handleNextClick}
+            isLoading={isNextPhaseLoading}
+            loadingText="Processing..."
+            disabled={evidence.length === 0}
+          >
+            Generate Next Phase &rarr;
+          </LoadingButton>
+        )}
+
+        {/* Show "Processing..." disabled button if active */}
+        {reportStatus === 'PROCESSING' && (
+          <button disabled className="bg-bg-medium text-text-muted rounded-md text-sm font-semibold px-4 py-2 cursor-not-allowed opacity-70 flex items-center gap-2">
+            <div className="animate-spin h-3 w-3 border-2 border-current border-t-transparent rounded-full"></div>
+            AI Working...
+          </button>
+        )}
       </div>
+      {/* FLOATING THINKING PANEL */}
+      {/* It sits on top of everything but doesn't block interaction with the list */}
+      {isThinking && <ThinkingPanel log={streamLog} />}
 
       {/* --- Skip Confirmation Modal --- */}
       {isSkipModalOpen && (

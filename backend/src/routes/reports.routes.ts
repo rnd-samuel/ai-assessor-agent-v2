@@ -2,7 +2,7 @@
 import { Router, Request } from 'express';
 import { authenticateToken, authorizeRole } from '../middleware/auth.middleware';
 import { query } from '../services/db';
-import { aiGenerationQueue } from '../services/queue';
+import { aiGenerationQueue, fileIngestionQueue } from '../services/queue';
 import { uploadToGCS } from '../services/storage';
 import { generateReportDocx } from '../services/document-service';
 import multer from 'multer';
@@ -101,12 +101,12 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
 
 /**
  * (NR-6.2) Upload assessment result files for a new report
- * This route expects 'multipart/form-data'
  */
 router.post('/:id/upload', authenticateToken, upload.single('file'), async (req: AuthenticatedRequest, res) => {
   const { id: reportId } = req.params;
   const { simulationMethod } = req.body;
   const file = req.file;
+  const userId = req.user?.userId;
 
   if (!file || !simulationMethod) return res.status(400).send({ message: 'File or method missing.' });
 
@@ -124,18 +124,26 @@ router.post('/:id/upload', authenticateToken, upload.single('file'), async (req:
     // 2. GCS Upload
     const gcsPath = await uploadToGCS(file.buffer, file.originalname, `reports/${reportId}/evidence`);
 
-    // 3. Save DB
-    // NOTE: We still save 'file_content' as text for now because the AI service (Phase 1) currently reads it from DB.
-    // In a future sprint (RAG), we will remove 'file_content' and read from GCS/Vector DB.
-    const fileContent = await extractTextFromFile(file.buffer, file.mimetype);
-
-    await query(
-      `INSERT INTO report_files (report_id, file_name, gcs_path, simulation_method_tag, file_content, file_hash)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [reportId, file.originalname, gcsPath, simulationMethod, fileContent, fileHash]
+    // 3. Save DB (Metadata Only - No file_content)
+    const dbResult = await query(
+      `INSERT INTO report_files (report_id, file_name, gcs_path, simulation_method_tag, file_hash)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      [reportId, file.originalname, gcsPath, simulationMethod, fileHash]
     );
+    
+    const newFileId = dbResult.rows[0].id;
 
-    res.status(200).send({ message: 'File uploaded.', filename: file.originalname });
+    // 4. Queue for Ingestion (Chunking + Embedding)
+    await fileIngestionQueue.add('process-report-file', {
+        fileId: newFileId,
+        gcsPath: gcsPath,
+        reportId: reportId,
+        userId: userId
+    });
+    console.log(`[Upload] Queued report file ${newFileId} for embedding.`);
+
+    res.status(200).send({ message: 'File uploaded and processing started.', filename: file.originalname });
 
   } catch (error) {
     console.error('Report upload failed', error);
@@ -310,16 +318,29 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       if (dictResult.rows.length > 0) dictionary = dictResult.rows[0].content;
     }
 
+    // 4. Fetch Evidence
     const evidenceResult = await query(
       `SELECT * FROM evidence WHERE report_id = $1 AND is_archived = false ORDER BY competency, level, created_at`,
       [reportId]
     );
 
+    // 5. Fetch Files (UPDATED)
+    // We select 'extracted_text' as 'file_content' directly
     const filesResult = await query(
-      `SELECT id, file_name, simulation_method_tag, file_content FROM report_files WHERE report_id = $1`,
+      `SELECT id, file_name, simulation_method_tag, extracted_text as file_content 
+       FROM report_files 
+       WHERE report_id = $1
+       ORDER BY created_at ASC`, // Keep consistent order
       [reportId]
     );
 
+    const rawFiles = filesResult.rows.map(f => ({
+        ...f,
+        // Fallback if text hasn't been processed yet
+        file_content: f.file_content || "(Processing text... please refresh in a moment)"
+    }));
+
+    // 6. Fetch Analysis & Summary
     const analysisResult = await query(
       `SELECT * FROM competency_analysis WHERE report_id = $1 ORDER BY competency`,
       [reportId]
@@ -346,7 +367,7 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       targetPhase,
       creatorId: report.creator_id,
       evidence: evidenceResult.rows,
-      rawFiles: filesResult.rows,
+      rawFiles: rawFiles, // Now contains the reconstructed text!
       competencyAnalysis: analysisResult.rows,
       executiveSummary: summaryResult.rows[0] || null,
       dictionary
@@ -479,6 +500,15 @@ router.post('/:id/generate/phase1', authenticateToken, async (req: Authenticated
     await aiGenerationQueue.add('generate-phase-1', {
       reportId,
       userId
+    }, {
+      // Retry Configuration
+      attempts: 6,
+      backoff: {
+        type: 'exponential',
+        delay: 2000,
+      },
+      removeOnComplete: true,
+      removeOnFail: false
     });
 
     res.status(200).send({ message: "Phase 1 generation started." });
@@ -509,6 +539,15 @@ router.post('/:id/generate/phase2', authenticateToken, async (req: Authenticated
     await aiGenerationQueue.add('generate-phase-2', {
       reportId,
       userId
+    }, {
+      // Retry Configuration
+      attempts: 6,
+      backoff: {
+        type: 'exponential',
+        delay: 2000,
+      },
+      removeOnComplete: true,
+      removeOnFail: false
     });
 
     res.status(200).send({ message: "Phase 2 generation started." });
@@ -550,6 +589,15 @@ router.post('/:id/generate/phase3', authenticateToken, async (req: Authenticated
     await aiGenerationQueue.add('generate-phase-3', {
       reportId,
       userId
+    }, {
+      // Retry Configuration
+      attempts: 6,
+      backoff: {
+        type: 'exponential',
+        delay: 2000,
+      },
+      removeOnComplete: true,
+      removeOnFail: false
     });
 
     res.status(200).send({ message: "Phase 3 generation started." });
@@ -694,6 +742,21 @@ router.get('/:id/export', authenticateToken, async (req: AuthenticatedRequest, r
         return res.status(400).send({ message: error.message });
     }
     res.status(500).send({ message: "Internal server error during export." });
+  }
+});
+
+/**
+ * (Maintenance) Reset Report Status
+ * Useful if a job gets stuck in PROCESSING due to a crash.
+ */
+router.post('/:id/reset-status', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+  try {
+    await query("UPDATE reports SET status = 'FAILED' WHERE id = $1", [reportId]);
+    res.status(200).send({ message: "Report status reset to FAILED." });
+  } catch (error) {
+    console.error("Error resetting status:", error);
+    res.status(500).send({ message: "Internal server error" });
   }
 });
 

@@ -284,6 +284,9 @@ export default function ReportPage() {
   } | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
   const [isRefining, setIsRefining] = useState(false);
+
+  const [streamLog, setStreamLog] = useState('');
+  const [isThinking, setIsThinking] = useState(false);
   
   // Tabs & Phases
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>('evidence');
@@ -332,10 +335,11 @@ export default function ReportPage() {
   const activeFile = reportData?.rawFiles.find(f => f.id === activeFileId);
   
   // --- Data Fetching ---
-  const fetchReportData = useCallback(async () => {
+  const fetchReportData = useCallback(async (isBackground = false) => {
     if (!reportId) return;
     try {
-      setIsLoading(true);
+      if (!isBackground) setIsLoading(true);
+
       const response = await apiService.get<ReportData>(`/reports/${reportId}/data`);
       
       // 1. Handle Report Data
@@ -375,6 +379,14 @@ export default function ReportPage() {
       // 4. Restore Progress
       const phase = response.data.currentPhase;
       const target = response.data.targetPhase;
+
+      // Restore Thinking State
+      if (response.data.status === 'PROCESSING') {
+        setIsThinking(true);
+        setStreamLog((prev) => prev ? prev : "🔄 Resuming connection to AI stream...\n");
+      } else {
+        setIsThinking(false);
+      }
       
       // We use a functional update to ensure we check against the *current* state, not the closure's stale version
       setHighestPhaseVisible((prev) => {
@@ -399,9 +411,9 @@ export default function ReportPage() {
 
     } catch (err) {
       console.error("Failed to load report:", err);
-      addToast("Failed to load report data.", 'error');
+      if (!isBackground) addToast("Failed to load report data.", 'error');
     } finally {
-      setIsLoading(false);
+      if (!isBackground) setIsLoading(false);
     }
   }, [reportId, addToast]);
 
@@ -413,35 +425,68 @@ export default function ReportPage() {
     const socket = getSocket();
     if (!socket || !reportId) return;
 
+    // 1. Auto-Refresh File Text (Point #1)
+    const onFileProcessed = (data: { fileId: string }) => {
+        console.log('Received file-processed event:', data);
+        // Check if this file belongs to our current report
+        if (reportData?.rawFiles.some(f => f.id === data.fileId)) {
+            addToast("Assessment text processed. Refreshing...", 'success');
+            fetchReportData(); // Reload to get the extracted_text
+        }
+    };
+
+    // 2. AI Streaming (Point #5)
+    const onAiStream = (data: { reportId: string, chunk: string }) => {
+        if (data.reportId === reportId) {
+            setIsThinking(true);
+            setStreamLog(prev => prev + data.chunk);
+            
+            // Auto-scroll the thinking panel (optional, handled by CSS usually)
+            const panel = document.getElementById('thinking-panel');
+            if (panel) panel.scrollTop = panel.scrollHeight;
+        }
+    };
+
     const onLocalComplete = async (data: { reportId: string, message: string }) => {
         if (data.reportId === reportId) {
-            console.log('ReportPage: Generation complete. Fetching new data...');
-            
-            // 1. Fetch Data
-            // We await this so the UI updates with the new content FIRST.
+            setIsThinking(false); // Stop showing panel
+            setStreamLog(''); // Clear log or keep it? Let's clear it for next run.
             await fetchReportData();
-            
-            // 2. Show Toast immediately after fetch resolves
-            // This ensures "Content Loaded" -> "Toast Appears" sequence is tight.
             addToast(data.message, 'success');
         }
     };
 
     const onLocalFailed = async (data: { reportId: string, message: string }) => {
         if (data.reportId === reportId) {
+             setIsThinking(false);
              await fetchReportData(); 
              addToast(data.message, 'error');
         }
     };
 
+    // Incremental Evidence Loading
+    const onBatchSaved = (data: { reportId: string, competency: string, count: number }) => {
+        if (data.reportId === reportId) {
+            console.log(`Batch saved: ${data.count} items for ${data.competency}`);
+            // Trigger a "Silent" fetch (no spinner)
+            fetchReportData(true); 
+        }
+    };
+
+    socket.on('file-processed', onFileProcessed);
+    socket.on('evidence-batch-saved', onBatchSaved);
+    socket.on('ai-stream', onAiStream);
     socket.on('generation-complete', onLocalComplete);
     socket.on('generation-failed', onLocalFailed);
 
     return () => {
+        socket.off('file-processed', onFileProcessed);
+        socket.off('evidence-batch-saved', onBatchSaved);
+        socket.off('ai-stream', onAiStream);
         socket.off('generation-complete', onLocalComplete);
         socket.off('generation-failed', onLocalFailed);
     };
-  }, [reportId, fetchReportData, addToast]);
+  }, [reportId, reportData, fetchReportData, addToast]);
 
   const handleSaveReport = async () => {
     if (!reportId) return;
@@ -762,6 +807,19 @@ const submitRefinement = async () => {
   }
 };
 
+const handleReset = async () => {
+  if (!reportId) return;
+  if (!confirm("This will stop the current process (if any) and allow you to restart. Continue?")) return;
+
+  try {
+    await apiService.post(`/reports/${reportId}/reset-status`);
+    addToast("Status reset. You can try generating again.", 'info');
+    fetchReportData(); // Reload UI
+  } catch (error) {
+    addToast("Failed to reset status.", 'error');
+  }
+};
+
 const closeModal = (key: keyof ModalsState) => setModals(prev => ({ ...prev, [key]: false }));
 
 const blocker = useBlocker(
@@ -894,7 +952,7 @@ const blocker = useBlocker(
                       {isEvidenceLocked
                         ? 'Evidence collection is locked because competency analysis has been done.'
                         : selectedText
-                          ? 'Text selected. Click "+ Add Manual" on the right.'
+                          ? 'Text selected. Click "+ Evidence" on the right.'
                           : isWaitingForSelection
                             ? 'Waiting for selection...'
                             : 'Highlight text above to capture evidence.'
@@ -947,6 +1005,10 @@ const blocker = useBlocker(
                         reportStatus={reportData?.status || 'CREATED'}
                         onGeneratePhase1={handleGeneratePhase1}
                         onGenerateNext={handleGeneratePhase2}
+                        onReset={handleReset}
+                        targetPhase={reportData?.targetPhase || 1}
+                        isThinking={isThinking}
+                        streamLog={streamLog}
                     />
                 )}
                 
@@ -1107,7 +1169,7 @@ const blocker = useBlocker(
           onStay={() => blocker.reset()}
           onLeave={() => blocker.proceed()}
         />
-      )}      
+      )}
     </div>
   );
 }

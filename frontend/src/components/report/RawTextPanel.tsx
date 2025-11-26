@@ -16,6 +16,35 @@ interface RawTextPanelProps {
   onTextSelection: (text: string) => void;
 }
 
+// Helper: Fuzzy finder
+const findQuoteIndex = (fullText: string, quote: string) => {
+  if (!quote || !fullText) return -1;
+    
+  // 1. Exact match
+  let idx = fullText.indexOf(quote);
+  if (idx !== -1) return idx;
+
+  // 2. Normalized match (ignore extra whitespace)
+  // This assumes fullText doesn't have massive gaps, which our ingestion cleanup helps with.
+    
+  // 3. First 20 chars (Fuzzy Start)
+  // Sometimes AI adds punctuation or changes the end slightly.
+  const shortStart = quote.substring(0, 20);
+  if (shortStart.length > 5) {
+    idx = fullText.indexOf(shortStart);
+    if (idx !== -1) return idx;
+  }
+
+    // 4. First 10 Words (User Idea)
+    const words = quote.split(/\s+/).slice(0, 10).join(' ');
+  if (words.length > 10) {
+    idx = fullText.indexOf(words);
+    if (idx !== -1) return idx;
+  }
+
+  return -1;
+};
+
 export default function RawTextPanel({
   files,
   activeFileId,
@@ -61,29 +90,28 @@ export default function RawTextPanel({
     if (!activeFile) return null;
     const content = activeFile.file_content;
 
-    if (activeQuote && content.includes(activeQuote)) {
-      const parts = content.split(activeQuote);
+    const startIdx = findQuoteIndex(content, activeQuote || '');
+
+    if (activeQuote && startIdx !== -1) {
+      const before = content.substring(0, startIdx);
+      // We highlight roughly the length of the quote (or just the part we found)
+      // Ideally we'd find the end index too, but for "first 10 words" fallback, 
+      // highlighting just those 10 words is better than nothing.
+      const matchLength = activeQuote.length; 
+      const highlight = content.substring(startIdx, startIdx + matchLength);
+      const after = content.substring(startIdx + matchLength);
+
       return (
         <div className="whitespace-pre-wrap">
-          {parts.map((part, index) => (
-            <span key={index}>
-              {part}
-              {index < parts.length - 1 && (
-                <mark
-                  id={index === 0 ? 'active-highlight' : undefined} // ID for scrolling
-                  className="bg-yellow-200 text-text-primary rounded-sm"
-                >
-                  {activeQuote}
-                </mark>
-              )}
-            </span>
-          ))}
+          {before}
+          <mark id="active-highlight" className="bg-yellow-200...">{highlight}</mark>
+          {after}
         </div>
       );
-    }
-
-    return <div className="whitespace-pre-wrap">{content}</div>;
   };
+
+  return <div className="whitespace-pre-wrap">{content}</div>;
+};
 
   return (
     <div className="h-full flex flex-col border-r border-border overflow-hidden bg-bg-light">

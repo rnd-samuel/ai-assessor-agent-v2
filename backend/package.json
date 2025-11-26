@@ -17,6 +17,7 @@
     "@llamaindex/core": "^0.6.22",
     "@llamaindex/openai": "^0.4.21",
     "@llamaindex/postgres": "^0.0.65",
+    "@socket.io/redis-adapter": "^8.3.0",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.63.0",
     "cors": "^2.8.5",
@@ -27,8 +28,10 @@
     "llamaindex": "^0.12.0",
     "multer": "^2.0.2",
     "officeparser": "^5.2.2",
+    "openai": "^6.9.1",
     "pg": "^8.16.3",
     "pizzip": "^3.2.0",
+    "redis": "^5.10.0",
     "socket.io": "^4.8.1",
     "zod": "^4.1.12"
   },

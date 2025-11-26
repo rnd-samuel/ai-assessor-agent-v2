@@ -30,6 +30,8 @@ interface ProjectContextData {
   dictionaryId: string | null;
   simulationMethods: string[];
   generalContext: string;
+  enableAnalysis: boolean;
+  enableSummary: boolean;
 }
 
 interface ProjectContextModalProps {
@@ -251,6 +253,19 @@ export default function ProjectContextModal({ isOpen, onClose, projectId }: Proj
                         {method}
                       </span>
                     ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-text-muted uppercase">Configuration</label>
+                  <div className="mt-1 flex gap-4">
+                    <div className={`flex items-center gap-2 text-sm ${data.enableAnalysis ? 'text-text-primary' : 'text-text-muted/70'}`}>
+                      <span>{data.enableAnalysis ? '✅' : '❌'}</span>
+                      <span>Competency Analysis</span>
+                    </div>
+                    <div className={`flex items-center gap-2 text-sm ${data.enableSummary ? 'text-text-primary' : 'text-text-muted/70'}`}>
+                      <span>{data.enableSummary ? '✅' : '❌'}</span>
+                      <span>Executive Summary</span>
+                    </div>
                   </div>
                 </div>
                 <div>

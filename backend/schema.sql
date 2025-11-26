@@ -305,3 +305,77 @@ VALUES
   ('openrouter/anthropic/claude-3-opus', 'Claude 3 Opus', 200000, 15.00, 75.00),
   ('openrouter/google/gemini-pro-1.5', 'Gemini 1.5 Pro', 1000000, 3.50, 10.50)
 ON CONFLICT DO NOTHING;
+
+-- 1. Enable vector extension (if not already)
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- 2. Create the Chunks table
+CREATE TABLE IF NOT EXISTS document_chunks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  
+  -- Polymorphic link: Can belong to a Report File OR a Global Sim File
+  report_file_id UUID REFERENCES report_files(id) ON DELETE CASCADE,
+  global_file_id UUID REFERENCES global_simulation_files(id) ON DELETE CASCADE,
+  
+  chunk_index INT NOT NULL, -- To keep order
+  chunk_content TEXT NOT NULL,
+  embedding vector(1536), -- Dimensions for text-embedding-3-small (OpenAI) or similar
+  
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  
+  -- Ensure a chunk belongs to only one type of file
+  CONSTRAINT chk_file_source CHECK (
+    (report_file_id IS NOT NULL AND global_file_id IS NULL) OR
+    (report_file_id IS NULL AND global_file_id IS NOT NULL)
+  )
+);
+
+-- 3. Create Index for faster similarity search
+CREATE INDEX ON document_chunks USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+-- 4. Cleanup old columns (OPTIONAL - Run only if you want to drop data now)
+-- ALTER TABLE report_files DROP COLUMN IF EXISTS file_content;
+-- ALTER TABLE global_simulation_files DROP COLUMN IF EXISTS file_content;
+
+-- 1. Remove the inefficient index we just made
+DROP INDEX IF EXISTS document_chunks_embedding_idx;
+
+-- 2. Create an HNSW index instead (Better for dynamic data)
+CREATE INDEX document_chunks_embedding_idx 
+ON document_chunks 
+USING hnsw (embedding vector_cosine_ops);
+
+-- 1. Add the missing column for Project Files
+ALTER TABLE document_chunks 
+ADD COLUMN IF NOT EXISTS project_file_id UUID REFERENCES project_files(id) ON DELETE CASCADE;
+
+-- 2. Drop the old constraint (if it exists)
+ALTER TABLE document_chunks DROP CONSTRAINT IF EXISTS chk_file_source;
+
+-- 3. Add a stricter constraint: Exactly one ID must be present
+ALTER TABLE document_chunks 
+ADD CONSTRAINT chk_file_source CHECK (
+  (
+    (report_file_id IS NOT NULL)::integer + 
+    (global_file_id IS NOT NULL)::integer + 
+    (project_file_id IS NOT NULL)::integer
+  ) = 1
+);
+
+ALTER TABLE report_files 
+ADD COLUMN IF NOT EXISTS extracted_text TEXT;
+
+ALTER TABLE report_files 
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+ALTER TABLE evidence 
+ADD COLUMN IF NOT EXISTS is_ai_generated BOOLEAN DEFAULT false;
+
+-- 1. Add text column to Project Files (Knowledge Base)
+ALTER TABLE project_files 
+ADD COLUMN IF NOT EXISTS extracted_text TEXT;
+
+-- 2. Add text column to Global Files (For future use)
+ALTER TABLE global_simulation_files 
+ADD COLUMN IF NOT EXISTS extracted_text TEXT;

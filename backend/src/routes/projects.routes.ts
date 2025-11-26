@@ -7,6 +7,7 @@ import multer from 'multer';
 import crypto from 'crypto';
 import { generateReportDocx } from '../services/document-service';
 import { extractDocxPlaceholders } from '../services/document-service';
+import { fileIngestionQueue } from '../services/queue';
 
 // Extend Request type to include 'user'
 interface AuthenticatedRequest extends Request {
@@ -304,10 +305,11 @@ router.get('/:id/form-data', authenticateToken, async (req, res) => {
 
 // --- (NP-4.2/4.3) Upload Project Files (GCS + Duplicate Check) ---
 router.post('/:id/upload', authenticateToken, authorizeRole('Admin', 'Project Manager'), upload.single('file'),
-  async (req, res) => {
+  async (req: AuthenticatedRequest, res) => {
     const { id: projectId } = req.params;
     const { fileType } = req.body; // 'template', 'knowledgeBase'
     const file = req.file;
+    const userId = req.user?.userId;
 
     if (!file || !fileType) return res.status(400).send({ message: 'File or fileType missing.' });
 
@@ -337,20 +339,35 @@ router.post('/:id/upload', authenticateToken, authorizeRole('Admin', 'Project Ma
       const gcsPath = await uploadToGCS(file.buffer, file.originalname, folder);
 
       // 4. Save to DB
-      await query(
-        `INSERT INTO project_files (project_id, file_name, gcs_path, file_type, file_hash) 
-         VALUES ($1, $2, $3, $4, $5)`,
+      const dbResult = await query(
+        `INSERT INTO project_files (project_id, file_name, gcs_path, file_type, file_hash)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id`,
         [projectId, file.originalname, gcsPath, fileType, fileHash]
       );
 
+      const newFileId = dbResult.rows[0].id;
+
+      // 5. Trigger Background Processing (Chunking & Embedding)
+      // We only need to embed Knowledge Base files, not Templates
+      if (fileType === 'knowledgeBase') {
+        await fileIngestionQueue.add('process-project-file', {
+          fileId: newFileId,
+          gcsPath: gcsPath,
+          userId: userId,
+          projectId: projectId
+        });
+        console.log(`[Upload] Queued file ${newFileId} for embedding.`);
+      }
+
+      // 6. Handle Template Analysis (Synchronous is fine for small docx headers)
       let placeholders: string[] = [];
 
       if (fileType === 'template') {
         try {
           placeholders = extractDocxPlaceholders(file.buffer);
         } catch (err) {
-          console.error("Template analysis failed:", err);
-          return res.status(400).send({ message: "Invalid DOCX template. Could not parse placeholders." });
+          console.error("Template analysis warning:", err);
         }
       }
       
@@ -776,6 +793,8 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
       `SELECT 
          p.name as project_name,
          p.dictionary_id,
+         p.enable_analysis,
+         p.enable_summary,
          u.email as creator_email,
          u.name as creator_name,
          cd.name as dictionary_name,
@@ -855,7 +874,9 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
       dictionaryTitle: projectData.dictionary_name || 'N/A',
       dictionaryId: projectData.dictionary_id,
       simulationMethods: simMethods,
-      generalContext: projectData.general_context || 'No general context provided.'
+      generalContext: projectData.general_context || 'No general context provided.',
+      enableAnalysis: projectData.enable_analysis,
+      enableSummary: projectData.enable_summary
     });
 
   } catch (error) {

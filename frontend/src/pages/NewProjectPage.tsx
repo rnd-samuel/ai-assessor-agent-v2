@@ -272,9 +272,10 @@ export default function NewProjectPage() {
         // (P14) Redirect to the new project's report dashboard
         navigate(`/projects/${projectId}`);
 
-    } catch (error) {
+    } catch (error: any) {
         console.error("Failed to create project:", error);
-        addToast('Error: Could not create project.', 'error');
+        const errorMessage = error.response?.data?.message || 'Error: Could not create project.';
+        addToast(errorMessage, 'error');
     }
   };
   
