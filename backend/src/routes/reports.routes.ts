@@ -28,33 +28,6 @@ const calculateHash = (buffer: Buffer): string => {
 };
 
 /**
- * Helper to extract text based on mime type using officeparser
- */
-async function extractTextFromFile(buffer: Buffer, mimeType: string): Promise<string> {
-  try {
-    console.log(`[Text Extraction] Processing file type: ${mimeType}`);
-
-    if (mimeType === 'text/plain') {
-      return buffer.toString('utf-8').replace(/\0/g, '');
-    }
-
-    // officeparser handles PDF, DOCX, PPTX, ODT, etc.
-    // We pass the buffer directly.
-    const text = await officeParser.parseOfficeAsync(buffer);
-    
-    if (typeof text !== 'string') {
-      throw new Error('Parsed content is not a string');
-    }
-
-    return text;
-
-  } catch (error) {
-    console.error(`[Text Extraction] Error parsing file type ${mimeType}:`, error);
-    throw new Error("Failed to extract text from file.");
-  }
-}
-
-/**
  * (FR-AI-001) Create a new Report
  * This endpoint creates the report record in the database.
  * The file uploads will be handled by a separate endpoint.

@@ -438,6 +438,9 @@ export default function ReportPage() {
     // 2. AI Streaming (Point #5)
     const onAiStream = (data: { reportId: string, chunk: string }) => {
         if (data.reportId === reportId) {
+            if (reportData?.status === 'FAILED' || reportData?.status === 'COMPLETED') {
+                return;
+            }
             setIsThinking(true);
             setStreamLog(prev => prev + data.chunk);
             

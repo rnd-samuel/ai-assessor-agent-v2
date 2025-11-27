@@ -258,6 +258,11 @@ export default function NewProjectPage() {
               headers: { 'Content-Type': 'multipart/form-data' },
             });
           }
+
+          // Trigger context initialization
+          // Only needed if KB files were uploaded
+          addToast("Initializing AI Context...", 'info');
+          await apiService.post(`/projects/${projectId}/initialize-context`);
         }
 
         setIsUploading(false);

@@ -7,7 +7,7 @@ import multer from 'multer';
 import crypto from 'crypto';
 import { generateReportDocx } from '../services/document-service';
 import { extractDocxPlaceholders } from '../services/document-service';
-import { fileIngestionQueue } from '../services/queue';
+import { aiGenerationQueue, fileIngestionQueue } from '../services/queue';
 
 // Extend Request type to include 'user'
 interface AuthenticatedRequest extends Request {
@@ -792,6 +792,7 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
     const projectResult = await query(
       `SELECT 
          p.name as project_name,
+         p.status,
          p.dictionary_id,
          p.enable_analysis,
          p.enable_summary,
@@ -876,7 +877,8 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
       simulationMethods: simMethods,
       generalContext: projectData.general_context || 'No general context provided.',
       enableAnalysis: projectData.enable_analysis,
-      enableSummary: projectData.enable_summary
+      enableSummary: projectData.enable_summary,
+      status: projectData.status
     });
 
   } catch (error) {
@@ -940,6 +942,45 @@ router.post('/analyze-template', authenticateToken, upload.single('file'), (req,
   } catch (error) {
     console.error("Analysis error:", error);
     res.status(400).send({ message: "Failed to analyze template." });
+  }
+});
+
+/**
+ * (New) Initialize Project Context
+ * Called by Frontend after all KB files are uploaded.
+ */
+router.post('/:id/initialize-context', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: projectId } = req.params;
+  const userId = req.user?.userId;
+
+  try {
+    // 1. Fetch all KB files for this project
+    const kbFiles = await query(
+        "SELECT gcs_path FROM project_files WHERE project_id = $1 AND file_type = 'knowledgeBase'", 
+        [projectId]
+    );
+
+    if (kbFiles.rows.length === 0) {
+        // No files? Just mark ready (uses Global Context by default)
+        await query("UPDATE projects SET status = 'READY' WHERE id = $1", [projectId]);
+        return res.send({ message: "Project ready (No KB files)." });
+    }
+
+    // 2. Set status to INITIALIZING
+    await query("UPDATE projects SET status = 'INITIALIZING' WHERE id = $1", [projectId]);
+
+    // 3. Dispatch Job
+    await aiGenerationQueue.add('init-project-context', {
+        projectId,
+        files: kbFiles.rows, // Pass array of { gcs_path }
+        userId
+    });
+
+    res.send({ message: "Project context initialization started." });
+
+  } catch (error) {
+    console.error("Init context failed:", error);
+    res.status(500).send({ message: "Internal server error" });
   }
 });
 

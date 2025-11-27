@@ -28,6 +28,8 @@ export default function ReportsDashboard() {
 
   const allProjects = useProjectStore((state) => state.projects);
 
+  const [isProjectReady, setIsProjectReady] = useState(true);
+
   const currentProjectName = useMemo(() => {
     const project = allProjects.find(p => p.id === projectId);
     return project ? project.name : 'Loading Project...';
@@ -71,6 +73,29 @@ export default function ReportsDashboard() {
     if (!projectId) return; // Don't fetch if there's no project ID
     fetchActiveReports(searchQuery);
   }, [projectId]); // Re-fetch if the project ID changes
+
+  useEffect(() => {
+    if(!projectId) return;
+    apiService.get(`/projects/${projectId}/context`)
+      .then(res => {
+        if (res.data.status === 'INITIALIZING') {
+          setIsProjectReady(false);
+          addToast("Project is initializing AI context. Please wait...", 'info');
+                
+          // Poll for completion
+          const interval = setInterval(async () => {
+            const check = await apiService.get(`/projects/${projectId}/context`);
+            if (check.data.status === 'READY') {
+              setIsProjectReady(true);
+              addToast("Project is ready!", 'success');
+              clearInterval(interval);
+            }
+          }, 3000);
+          return () => clearInterval(interval);
+        }
+      })
+      .catch(console.error);
+  }, [projectId]);
 
   const fetchActiveReports = async (currentSearch: string = searchQuery) => {
     if (!projectId) return;
@@ -356,9 +381,10 @@ export default function ReportsDashboard() {
 
             <button
               onClick={navigateToNewReport}
-              className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors flex items-center gap-2">
+              disabled={!isProjectReady}
+              className={`bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors flex items-center gap-2${!isProjectReady ? 'opacity-50 cursor-not-allowed' : 'hover:bg-primary-hover'}`}>
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-              New Report
+              {!isProjectReady ? 'Initializing...' : 'New Report'}
             </button>
           </div>
 

@@ -85,6 +85,14 @@ export default function AdminPanelPage() {
     is_in_use: boolean;
   }[]>([]);
   const [isUploadingDict, setIsUploadingDict] = useState(false);
+
+  const [globalKbFiles, setGlobalKbFiles] = useState<{id: string, file_name: string, created_at: string}[]>([]);
+  const [isUploadingKb, setIsUploadingKb] = useState(false);
+
+  const [viewGuideModal, setViewGuideModal] = useState(false);
+  const [globalGuideContent, setGlobalGuideContent] = useState("");
+  const [isLoadingGuide, setIsLoadingGuide] = useState(false);
+
   const [editingDictionary, setEditingDictionary] = useState<{
     id: string; 
     name: string;
@@ -106,7 +114,6 @@ export default function AdminPanelPage() {
   // State for Users
   const [users, setUsers] = useState<{id: string, name: string, email: string, role: string}[]>([]);
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'User' });
-
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
 
   // We need a temporary state to hold the file while the user selects the method
@@ -247,6 +254,8 @@ export default function AdminPanelPage() {
     }
   }, [activeTab])
 
+  // Knowledge Files Tab Fetching
+
   const fetchDictionaries = async () => {
     try {
       const response = await apiService.get('/admin/dictionaries');
@@ -256,20 +265,90 @@ export default function AdminPanelPage() {
     }
   };
 
+  const fetchSimMethods = async () => {
+    try {
+      const response = await apiService.get('/admin/simulation-methods');
+      setSimMethods(response.data);
+    } catch (error) {
+      console.error("Failed to fetch methods", error);
+    }
+  };
+
+  const fetchSimFiles = async () => {
+    try {
+      const response = await apiService.get('/admin/simulation-files');
+      setSimFiles(response.data);
+    } catch (error) {
+      console.error("Failed to fetch sim files", error);
+    }
+  };
+
+  const fetchGlobalKb = async () => {
+    try {
+      const response = await apiService.get('/admin/knowledge-base');
+      setGlobalKbFiles(response.data);
+    } catch (error) { console.error("Failed to fetch global KB", error); }
+  };
+
   // Fetch when 'knowledge' tab is active
   useEffect(() => {
     if (activeTab === 'knowledge') {
       fetchDictionaries();
       fetchSimMethods();
       fetchSimFiles();
+      fetchGlobalKb();
     }
   }, [activeTab]);
 
-  const handleKnowledgeUpload = (files: FileList) => {
-    if (files.length > 0) {
-      // TODO: Implement backend endpoint for General Knowledge (ADM-8.5)
-      console.log("Uploading General Knowledge:", files);
-      addToast("General Knowledge upload coming soon (Backend pending).", 'info');
+  // Knowledge Tab Handlers
+  const handleKnowledgeUpload = async (files: FileList) => {
+    if (files.length === 0) return;
+    
+    setIsUploadingKb(true);
+    try {
+        // Loop through files since backend expects single file upload
+        for (const file of Array.from(files)) {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            await apiService.post('/admin/knowledge-base', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+        }
+        addToast(`${files.length} file(s) uploaded. Global Context is updating...`, 'success');
+        fetchGlobalKb();
+    } catch (error: any) {
+        console.error(error);
+        addToast(error.response?.data?.message || "Failed to upload file.", 'error');
+    } finally {
+        setIsUploadingKb(false);
+    }
+  };
+
+  const handleDeleteKb = async (id: string) => {
+    if (!confirm("Delete this file?")) return;
+    try {
+        await apiService.delete(`/admin/knowledge-base/${id}`);
+        addToast("File deleted.", 'success');
+        fetchGlobalKb();
+    } catch (error) {
+        addToast("Failed to delete file.", 'error');
+    }
+  };
+
+  const handleViewGlobalGuide = async () => {
+    setIsLoadingGuide(true);
+    setViewGuideModal(true);
+    try {
+        const response = await apiService.get('/admin/settings/global_context_guide');
+        // The value is stored as JSONB { text: "..." }
+        setGlobalGuideContent(response.data?.text || "No guide generated yet.");
+    } catch (error) {
+        console.error(error);
+        addToast("Failed to fetch global guide.", 'error');
+        setGlobalGuideContent("Error loading content.");
+    } finally {
+        setIsLoadingGuide(false);
     }
   };
 
@@ -357,15 +436,6 @@ export default function AdminPanelPage() {
     }
   };
 
-  const fetchSimMethods = async () => {
-    try {
-      const response = await apiService.get('/admin/simulation-methods');
-      setSimMethods(response.data);
-    } catch (error) {
-      console.error("Failed to fetch methods", error);
-    }
-  };
-
   const handleCreateMethod = async () => {
     if (!methodForm.name.trim()) {
       addToast("Method name is required", 'error');
@@ -406,15 +476,6 @@ export default function AdminPanelPage() {
       fetchSimMethods();
     } catch (error: any) {
       addToast(error.response?.data?.message || 'Failed to delete method.', 'error');
-    }
-  };
-
-  const fetchSimFiles = async () => {
-    try {
-      const response = await apiService.get('/admin/simulation-files');
-      setSimFiles(response.data);
-    } catch (error) {
-      console.error("Failed to fetch sim files", error);
     }
   };
 
@@ -846,24 +907,43 @@ export default function AdminPanelPage() {
               <h3 className="text-lg font-semibold text-text-primary">Knowledge Base Management</h3>
               {/* General Knowledge Files (A12) */}
               <div className="bg-bg-light p-6 rounded-lg shadow-sm border border-border space-y-4">
-                <h4 className="text-md font-semibold text-text-primary">General Knowledge Files</h4>
-                <p className="text-sm text-text-muted">Upload general documents (.pdf, .docx, .txt) to be available to all AI requests.</p>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h4 className="text-md font-semibold text-text-primary">Global Knowledge Files</h4>
+                    <p className="text-sm text-text-muted">These documents are distilled into the Global Master Guide for all projects.</p>
+                  </div>
+                  <button
+                    onClick={handleViewGlobalGuide}
+                    className="text-sm bg-bg-medium hover:bg-border border border-border text-text-primary px-3 py-1.5 rounded-md transition-colors flex items-center gap-2"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                    View Current Guide
+                  </button>
+                </div>
                 <DragDropUploader
                   onUpload={handleKnowledgeUpload}
                   acceptedTypes=".pdf,.docx,.txt"
                   multiple={true}
                   subLabel="PDF, DOCX, or TXT"
+                  label={isUploadingKb ? "Uploading & Processing..." : "Click to upload or drag and drop"}
                 />
                 <div>
-                  <h5 className="text-sm font-medium text-text-primary mb-2">Uploaded Files:</h5>
+                  <h5 className="text-sm font-medium text-text-primary mb-2">Uploaded Files ({globalKbFiles.length}):</h5>
                   <ul className="space-y-2">
-                    <li className="flex justify-between items-center text-sm p-2 bg-bg-medium rounded-md">
-                      <span>Company_Values_Handbook.pdf (Oct 23, 2025)</span>
-                      <button className="text-xs text-primary hover:underline">Download</button>
-                    </li>
+                    {globalKbFiles.length === 0 ? (
+                      <li className="text-sm text-text-muted italic">No global files uploaded yet.</li>
+                    ) : (
+                      globalKbFiles.map(file => (
+                        <li key={file.id} className="flex justify-between items-center text-sm p-2 bg-bg-medium rounded-md">
+                          <span>{file.file_name} <span className="text-text-muted text-xs">({new Date(file.created_at).toLocaleDateString()})</span></span>
+                          <button onClick={() => handleDeleteKb(file.id)} className="text-xs text-error hover:underline">Delete</button>
+                        </li>
+                      ))
+                    )}
                   </ul>
                 </div>
               </div>
+
               {/* Competency Dictionaries (A13) */}
               <div>
                 <h4 className="text-md font-semibold text-text-primary mb-2">Competency Dictionaries</h4>
@@ -1726,6 +1806,38 @@ export default function AdminPanelPage() {
                     <LoadingButton onClick={handleAddModel} isLoading={isSavingMethod}>Add Model</LoadingButton>
                 </div>
             </div>
+        </div>
+      )}
+
+      {/* View Global Guide Modal */}
+      {viewGuideModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => setViewGuideModal(false)}>
+          <div className="w-full max-w-4xl bg-bg-light rounded-lg shadow-lg flex flex-col max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+            
+            <div className="flex justify-between items-center p-6 border-b border-border">
+              <div>
+                <h3 className="text-xl font-bold text-text-primary">Global Master Assessment Guide</h3>
+                <p className="text-sm text-text-muted">This is the distilled context used by the AI for all projects.</p>
+              </div>
+              <button className="text-text-muted hover:text-text-primary p-2" onClick={() => setViewGuideModal(false)}>&times;</button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-8 bg-white">
+                {isLoadingGuide ? (
+                    <div className="flex justify-center py-12">
+                        <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full"></div>
+                    </div>
+                ) : (
+                    <div className="prose prose-sm max-w-none text-text-secondary font-mono whitespace-pre-wrap">
+                        {globalGuideContent}
+                    </div>
+                )}
+            </div>
+
+            <div className="p-4 bg-bg-light border-t border-border flex justify-end">
+              <button className="bg-white text-text-secondary border border-border rounded-md px-4 py-2 hover:bg-bg-medium" onClick={() => setViewGuideModal(false)}>Close</button>
+            </div>
+          </div>
         </div>
       )}
 

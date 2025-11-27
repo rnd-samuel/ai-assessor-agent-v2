@@ -3,6 +3,7 @@ import { Router, Request } from 'express';
 import { authenticateToken, authorizeRole } from '../middleware/auth.middleware';
 import { aiGenerationQueue } from '../services/queue';
 import { query } from '../services/db';
+import { uploadToGCS } from '../services/storage';
 import multer from 'multer';
 import bcrypt from 'bcrypt';
 
@@ -64,6 +65,70 @@ router.get('/stats/queue', async (req: AuthenticatedRequest, res) => {
     console.error("Error fetching queue stats:", error);
     res.status(500).send({ message: "Internal server error" });
   }
+});
+
+/**
+ * Get all Global Knowledge Files
+ */
+router.get('/knowledge-base', async (req: AuthenticatedRequest, res) => {
+  try {
+    const result = await query('SELECT id, file_name, created_at FROM global_knowledge_files ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching global KB:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * Upload Global Knowledge File -> Triggers Context Update
+ */
+router.post('/knowledge-base', upload.single('file'), async (req: AuthenticatedRequest, res) => {
+  const file = req.file;
+  const creatorId = req.user?.userId;
+
+  if (!file) return res.status(400).send({ message: 'File is required.' });
+
+  try {
+    // 1. Upload to GCS
+    const gcsPath = await uploadToGCS(file.buffer, file.originalname, 'global-kb');
+
+    // 2. Save Metadata
+    const result = await query(
+      'INSERT INTO global_knowledge_files (file_name, gcs_path, created_by) VALUES ($1, $2, $3) RETURNING id, file_name, created_at',
+      [file.originalname, gcsPath, creatorId]
+    );
+
+    // 3. Trigger Context Update Job
+    await aiGenerationQueue.add('update-global-context', {
+        gcsPath: gcsPath,
+        userId: creatorId
+    });
+
+    res.status(201).json({ 
+        message: "File uploaded. Global Context is updating...",
+        file: result.rows[0] 
+    });
+
+  } catch (error) {
+    console.error('Error uploading global KB:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+/**
+ * Delete Global Knowledge File
+ */
+router.delete('/knowledge-base/:id', async (req: AuthenticatedRequest, res) => {
+    // Note: Deleting a file does NOT automatically strip its info from the "Distilled Guide".
+    // The guide is a synthesis. To remove info, you'd typically need to regenerate the guide 
+    // or edit it manually (future feature). For now, we just delete the file record.
+    try {
+        await query('DELETE FROM global_knowledge_files WHERE id = $1', [req.params.id]);
+        res.send({ message: "File deleted." });
+    } catch (error) {
+        res.status(500).send({ message: "Server error" });
+    }
 });
 
 /**
@@ -293,6 +358,7 @@ router.get('/simulation-files', async (req: AuthenticatedRequest, res) => {
 /**
  * (ADM-8.7) Upload a new Global Simulation File
  * Expects multipart/form-data: { file: (binary), methodId: string }
+ * UPDATED: Now triggers 'update-sim-context'
  */
 router.post('/simulation-files', upload.single('file'), async (req: AuthenticatedRequest, res) => {
   const { methodId } = req.body;
@@ -304,20 +370,34 @@ router.post('/simulation-files', upload.single('file'), async (req: Authenticate
   }
 
   try {
-    // For this MVP, we assume text-based files (txt, markdown) or extractable content
-    // We'll just store the raw buffer as a string for now to simulate text extraction.
-    // TODO: REFACTOR - Currently stripping null bytes to prevent DB crash.
-    // We need to implement real PDF/DOCX text extraction (e.g., pdf-parse) here.
-    const fileContent = file.buffer.toString('utf-8').replace(/\0/g, '');
+    // 1. Upload to GCS (Changed from raw text storage)
+    const gcsPath = await uploadToGCS(file.buffer, file.originalname, `simulation-methods/${methodId}`);
 
+    // 2. Save Metadata (Removed file_content column use)
+    // Note: You might need to update your DB schema to remove 'file_content' constraint if it was NOT NULL
+    // For now, we just won't insert it, assuming you made it nullable or dropped it.
     const result = await query(
-      `INSERT INTO global_simulation_files (file_name, file_content, method_id, created_by) 
-       VALUES ($1, $2, $3, $4) 
+      `INSERT INTO global_simulation_files (file_name, gcs_path, method_id, created_by)
+       VALUES ($1, $2, $3, $4)
        RETURNING id, file_name`,
-      [file.originalname, fileContent, methodId, creatorId]
+      [file.originalname, gcsPath, methodId, creatorId]
     );
 
-    res.status(201).json(result.rows[0]);
+    const newFileId = result.rows[0].id;
+
+    // 3. Trigger Context Update
+    await aiGenerationQueue.add('update-sim-context', {
+        fileId: newFileId,
+        methodId,
+        gcsPath,
+        userId: creatorId
+    });
+
+    res.status(201).json({
+        message: "File uploaded. Simulation Context is updating...",
+        file: result.rows[0]
+    });
+
   } catch (error) {
     console.error('Error uploading simulation file:', error);
     res.status(500).send({ message: 'Internal server error' });

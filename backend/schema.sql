@@ -379,3 +379,31 @@ ADD COLUMN IF NOT EXISTS extracted_text TEXT;
 -- 2. Add text column to Global Files (For future use)
 ALTER TABLE global_simulation_files 
 ADD COLUMN IF NOT EXISTS extracted_text TEXT;
+
+-- 1. Allow projects to store their specific guide and initialization status
+ALTER TABLE projects 
+ADD COLUMN IF NOT EXISTS context_guide TEXT,
+ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'READY'; 
+-- 'status' will track if the AI is still reading the KB files (INITIALIZING vs READY)
+
+-- 2. Allow simulation methods to store their specific guide
+ALTER TABLE global_simulation_methods 
+ADD COLUMN IF NOT EXISTS context_guide TEXT;
+
+-- Note: The 'Global Knowledge Context' will be stored in your existing 'system_settings' table 
+-- under the key 'global_context_guide', so no schema change is needed there.
+
+CREATE TABLE IF NOT EXISTS global_knowledge_files (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  file_name VARCHAR(255) NOT NULL,
+  gcs_path VARCHAR(1024) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_by UUID REFERENCES users(id)
+);
+
+-- 1. Add context_guide to the specific FILES table
+ALTER TABLE global_simulation_files 
+ADD COLUMN IF NOT EXISTS context_guide TEXT;
+
+-- 2. (Optional) Remove it from the methods table to avoid confusion
+ALTER TABLE global_simulation_methods DROP COLUMN IF EXISTS context_guide;
