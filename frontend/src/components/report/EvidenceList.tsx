@@ -33,6 +33,7 @@ interface EvidenceListProps {
   targetPhase: number;
   isThinking: boolean;
   streamLog: string;
+  isResetting: boolean;
 
   onGeneratePhase1: () => void;
   onGenerateNext: () => void;
@@ -56,6 +57,7 @@ export default function EvidenceList({
   targetPhase,
   isThinking,
   streamLog,
+  isResetting,
   onGeneratePhase1,
   onGenerateNext,
   onReset,
@@ -75,14 +77,22 @@ export default function EvidenceList({
   const [isNextPhaseLoading, setIsNextPhaseLoading] = useState(false);
 
   // --- Derived Data ---
-  const competencyMap = useMemo(() => {
-    const map = new Map<string, string>();
+  const { competencyIndexMap, competencyNames } = useMemo(() => {
+    const indexMap: Record<string, number> = {};
+    const names: string[] = [];
+
     if (dictionary?.kompetensi) {
-      dictionary.kompetensi.forEach((c: any) => {
-        map.set(c.id, c.name || c.namaKompetensi);
+      dictionary.kompetensi.forEach((c: any, idx: number) => {
+        const name = c.name || c.namaKompetensi;
+        if (name) {
+            indexMap[name] = idx; // Store the array index (0, 1, 2...)
+            names.push(name);
+        }
+        // Also map ID if available, just in case evidence uses IDs
+        if (c.id) indexMap[c.id] = idx;
       });
     }
-    return map;
+    return { competencyIndexMap: indexMap, competencyNames: names };
   }, [dictionary]);
 
   const sourceList = useMemo(() => 
@@ -95,32 +105,43 @@ export default function EvidenceList({
 
   // --- Filtering Logic ---
   const filteredEvidence = useMemo(() => {
-    return evidence.filter((ev) => {
+    // A. Filter First
+    const filtered = evidence.filter((ev) => {
       return (
         (filters.competency === '' || ev.competency === filters.competency) &&
         (filters.level === '' || ev.level === filters.level) &&
         (filters.source === '' || ev.source === filters.source)
       );
     });
-  }, [evidence, filters]);
 
-  // 1. Robust Map using NAMES as keys (since AI outputs Names)
-  const competencyNames = useMemo(() => {
-    const names: string[] = [];
-    if (dictionary?.kompetensi) {
-      dictionary.kompetensi.forEach((c: any) => {
-        // Prefer 'name', fallback to 'namaKompetensi'
-        const name = c.name || c.namaKompetensi;
-        if (name) names.push(name);
+    // B. Then Sort
+    return filtered.sort((a, b) => {
+      // Primary Sort: Dictionary Order
+      // Default to 9999 if not found so unknown items go to bottom
+      const indexA = competencyIndexMap[a.competency] ?? 9999;
+      const indexB = competencyIndexMap[b.competency] ?? 9999;
+    
+      if (indexA !== indexB) {
+        return indexA - indexB;
+      }
+
+      // Secondary Sort: Level (Numeric Ascending)
+      const levelA = parseInt(a.level) || 0;
+      const levelB = parseInt(b.level) || 0;
+      if (levelA !== levelB) {
+        return levelA - levelB;
+      }
+
+      // Tertiary Sort: KB text (Alphabetical) or Insertion order
+      return a.kb.localeCompare(b.kb);
       });
-    }
-    return names.sort();
-  }, [dictionary]);
+
+  }, [evidence, filters, competencyIndexMap]);
 
   // --- Export Logic ---
   const handleExport = () => {
     const dataToExport = filteredEvidence.map((ev) => ({
-      Competency: competencyMap.get(ev.competency) || ev.competency,
+      Competency: ev.competency,
       Level: ev.level,
       'Key Behavior': ev.kb,
       Source: ev.source,
@@ -252,11 +273,11 @@ export default function EvidenceList({
              {(reportStatus === 'CREATED' || reportStatus === 'FAILED' || evidence.length === 0) && (
                 <LoadingButton
                   onClick={handleGenerateEvidence}
-                  isLoading={isGenEvidenceLoading}
-                  loadingText="Generating..."
-                  disabled={isViewOnly}
+                  isLoading={isGenEvidenceLoading || isResetting}
+                  loadingText={isResetting ? "Stopping..." : "Generating..."}
+                  disabled={isViewOnly || isResetting}
                   className="bg-gradient-to-r from-indigo-500 to-purple-600 border-none hover:from-indigo-600 hover:to-purple-700 text-white shadow-sm"
-                  icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/><path d="m12 8-2.5 3 1.5 4.5"/><path d="m17.5 8-2.5 3 1.5 4.5"/><path d="m7 8-2.5 3 1.5 4.5"/></svg>}
+                  icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>}
                 >
                   {reportStatus === 'FAILED' ? 'Retry AI Generation' : 'Generate Evidence'}
                 </LoadingButton>
@@ -311,7 +332,7 @@ export default function EvidenceList({
                 loadingText="Starting..."
                 disabled={isViewOnly}
                 className="bg-gradient-to-r from-indigo-500 to-purple-600 border-none hover:from-indigo-600 hover:to-purple-700 text-white shadow-sm mx-auto"
-                icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/><path d="m12 8-2.5 3 1.5 4.5"/><path d="m17.5 8-2.5 3 1.5 4.5"/><path d="m7 8-2.5 3 1.5 4.5"/></svg>}
+                icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>}
               >
                 Start AI Generation
               </LoadingButton>

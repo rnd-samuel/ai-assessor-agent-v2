@@ -407,3 +407,8 @@ ADD COLUMN IF NOT EXISTS context_guide TEXT;
 
 -- 2. (Optional) Remove it from the methods table to avoid confusion
 ALTER TABLE global_simulation_methods DROP COLUMN IF EXISTS context_guide;
+
+-- Run this in your database console
+ALTER TABLE reports ADD COLUMN active_job_id VARCHAR(255);
+
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS active_job_id VARCHAR(255);

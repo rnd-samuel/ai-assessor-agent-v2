@@ -287,6 +287,7 @@ export default function ReportPage() {
 
   const [streamLog, setStreamLog] = useState('');
   const [isThinking, setIsThinking] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   
   // Tabs & Phases
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>('evidence');
@@ -476,11 +477,23 @@ export default function ReportPage() {
         }
     };
 
+    const onGenerationCancelled = (data: { reportId: string, message: string }) => {
+        if (data.reportId === reportId) {
+            console.log("Worker confirmed stop.");
+            setIsResetting(false); // <--- Unlock the UI
+            setIsThinking(false);
+            setStreamLog('');
+            addToast("AI Generation stopped.", 'info');
+            fetchReportData(); // Refresh to ensure we see the clean state
+        }
+    };
+
     socket.on('file-processed', onFileProcessed);
     socket.on('evidence-batch-saved', onBatchSaved);
     socket.on('ai-stream', onAiStream);
     socket.on('generation-complete', onLocalComplete);
     socket.on('generation-failed', onLocalFailed);
+    socket.on('generation-cancelled', onGenerationCancelled);
 
     return () => {
         socket.off('file-processed', onFileProcessed);
@@ -488,6 +501,7 @@ export default function ReportPage() {
         socket.off('ai-stream', onAiStream);
         socket.off('generation-complete', onLocalComplete);
         socket.off('generation-failed', onLocalFailed);
+        socket.off('generation-cancelled', onGenerationCancelled);
     };
   }, [reportId, reportData, fetchReportData, addToast]);
 
@@ -814,11 +828,15 @@ const handleReset = async () => {
   if (!reportId) return;
   if (!confirm("This will stop the current process (if any) and allow you to restart. Continue?")) return;
 
+  setIsResetting(true);
+
   try {
     await apiService.post(`/reports/${reportId}/reset-status`);
-    addToast("Status reset. You can try generating again.", 'info');
+    addToast("Stopping AI...", 'info');
+    setTimeout(() => setIsResetting(false), 5000);
     fetchReportData(); // Reload UI
   } catch (error) {
+    setIsResetting(false);
     addToast("Failed to reset status.", 'error');
   }
 };
@@ -949,6 +967,9 @@ const blocker = useBlocker(
                     setActiveFileId={setActiveFileId}
                     activeQuote={activeQuote}
                     onTextSelection={handleTextSelection}
+                    onQuoteNotFound={() => {
+                        addToast("Could not locate this evidence text. It might be paraphrased.", 'error');
+                    }}
                 />
                 <div className="bg-bg-medium p-2 border-t border-border text-xs text-text-muted flex justify-between items-center flex-shrink-0">
                     <span>
@@ -1012,6 +1033,7 @@ const blocker = useBlocker(
                         targetPhase={reportData?.targetPhase || 1}
                         isThinking={isThinking}
                         streamLog={streamLog}
+                        isResetting={isResetting}
                     />
                 )}
                 

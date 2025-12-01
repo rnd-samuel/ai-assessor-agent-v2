@@ -466,11 +466,31 @@ router.post('/:id/generate/phase1', authenticateToken, async (req: Authenticated
   const userId = req.user?.userId;
 
   try {
-    // 1. Update status to PROCESSING
-    await query("UPDATE reports SET status = 'PROCESSING' WHERE id = $1", [reportId]);
+    // 1. SAFETY CHECK: Look for zombie jobs
+    const currentRes = await query("SELECT active_job_id FROM reports WHERE id = $1", [reportId]);
+    const previousJobId = currentRes.rows[0]?.active_job_id;
 
-    // 2. Add job to queue
-    await aiGenerationQueue.add('generate-phase-1', {
+    if (previousJobId) {
+      console.log(`[API] Found existing job ${previousJobId} for report ${reportId}. Attempting cleanup...`);
+      try {
+        // Try to find the job in the queue
+        const oldJob = await aiGenerationQueue.getJob(previousJobId);
+        if (oldJob) {
+          // Attempt to remove it (works if waiting/delayed/failed)
+          // If it's 'active', this might throw or fail, which is fine (the DB check will kill it)
+          await oldJob.remove(); 
+          console.log(`[API] Successfully removed stale job ${previousJobId} from queue.`);
+        }
+      } catch (err) {
+        console.warn(`[API] Could not remove old job (it might be already gone or locked):`, err);
+      }
+
+      // Explicitly invalidate in DB (The "Double Tap")
+      await query("UPDATE reports SET active_job_id = NULL WHERE id = $1", [reportId]);
+    }
+
+    // 2. Add job to queue to get ID
+    const job = await aiGenerationQueue.add('generate-phase-1', {
       reportId,
       userId
     }, {
@@ -483,6 +503,14 @@ router.post('/:id/generate/phase1', authenticateToken, async (req: Authenticated
       removeOnComplete: true,
       removeOnFail: false
     });
+
+    if (!job || !job.id) throw new Error("Failed to create job");
+
+    // 3. Update DB with Status AND the specific Job ID
+    await query(
+      "UPDATE reports SET status = 'PROCESSING', active_job_id = $1 WHERE id = $2", 
+      [job.id, reportId]
+    );
 
     res.status(200).send({ message: "Phase 1 generation started." });
   } catch (error) {
@@ -508,20 +536,43 @@ router.post('/:id/generate/phase2', authenticateToken, async (req: Authenticated
       return res.status(400).send({ message: "Cannot generate analysis: No evidence collected yet." })
     }
 
+    // SAFETY CHECK: Look for zombie jobs (The Defense-in-Depth Pattern)
+    const currentRes = await query("SELECT active_job_id FROM reports WHERE id = $1", [reportId]);
+    const previousJobId = currentRes.rows[0]?.active_job_id;
+
+    if (previousJobId) {
+      console.log(`[API] Found existing Phase 2 job ${previousJobId} for report ${reportId}. Attempting cleanup...`);
+      try {
+        const oldJob = await aiGenerationQueue.getJob(previousJobId);
+        if (oldJob) {
+          await oldJob.remove();
+          console.log(`[API] Successfully removed stale job ${previousJobId} from queue.`);
+        }
+      } catch (err) {
+        console.warn(`[API] Could not remove old job:`, err);
+      }
+      // Invalidate DB to kill running worker
+      await query("UPDATE reports SET active_job_id = NULL WHERE id = $1", [reportId]);
+    }
+
     // Add job to queue
-    await aiGenerationQueue.add('generate-phase-2', {
+    const job = await aiGenerationQueue.add('generate-phase-2', {
       reportId,
       userId
     }, {
-      // Retry Configuration
       attempts: 6,
-      backoff: {
-        type: 'exponential',
-        delay: 2000,
-      },
+      backoff: { type: 'exponential', delay: 2000 },
       removeOnComplete: true,
       removeOnFail: false
     });
+
+    if (!job || !job.id) throw new Error("Failed to create job");
+
+    // Authorize new job
+    await query(
+      "UPDATE reports SET status = 'PROCESSING', active_job_id = $1 WHERE id = $2", 
+      [job.id, reportId]
+    );
 
     res.status(200).send({ message: "Phase 2 generation started." });
   } catch (error) {
@@ -559,19 +610,42 @@ router.post('/:id/generate/phase3', authenticateToken, async (req: Authenticated
         return res.status(400).send({ message: "Cannot generate summary: Competency analysis (Phase 2) is missing." });
     }
 
-    await aiGenerationQueue.add('generate-phase-3', {
+    // SAFETY CHECK: Look for zombie jobs
+    const currentRes = await query("SELECT active_job_id FROM reports WHERE id = $1", [reportId]);
+    const previousJobId = currentRes.rows[0]?.active_job_id;
+
+    if (previousJobId) {
+      console.log(`[API] Found existing Phase 3 job ${previousJobId} for report ${reportId}. Attempting cleanup...`);
+      try {
+        const oldJob = await aiGenerationQueue.getJob(previousJobId);
+        if (oldJob) {
+          await oldJob.remove();
+          console.log(`[API] Successfully removed stale job ${previousJobId} from queue.`);
+        }
+      } catch (err) {
+        console.warn(`[API] Could not remove old job:`, err);
+      }
+      await query("UPDATE reports SET active_job_id = NULL WHERE id = $1", [reportId]);
+    }
+
+    // Add new job to queue
+    const job = await aiGenerationQueue.add('generate-phase-3', {
       reportId,
       userId
     }, {
-      // Retry Configuration
       attempts: 6,
-      backoff: {
-        type: 'exponential',
-        delay: 2000,
-      },
+      backoff: { type: 'exponential', delay: 2000 },
       removeOnComplete: true,
       removeOnFail: false
     });
+
+    if (!job || !job.id) throw new Error("Failed to create job");
+
+    // Authorize new job
+    await query(
+      "UPDATE reports SET status = 'PROCESSING', active_job_id = $1 WHERE id = $2", 
+      [job.id, reportId]
+    );
 
     res.status(200).send({ message: "Phase 3 generation started." });
   } catch (error) {
@@ -725,7 +799,10 @@ router.get('/:id/export', authenticateToken, async (req: AuthenticatedRequest, r
 router.post('/:id/reset-status', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const { id: reportId } = req.params;
   try {
-    await query("UPDATE reports SET status = 'FAILED' WHERE id = $1", [reportId]);
+    await query(
+      "UPDATE reports SET status = 'FAILED', active_job_id = NULL WHERE id = $1",
+      [reportId]
+    );
     res.status(200).send({ message: "Report status reset to FAILED." });
   } catch (error) {
     console.error("Error resetting status:", error);

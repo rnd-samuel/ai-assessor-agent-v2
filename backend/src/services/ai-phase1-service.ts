@@ -7,6 +7,7 @@ import { ChatCompletionChunk } from 'openai/resources/chat/completions';
 import { z } from 'zod';
 import { publishEvent } from './redis-publisher';
 import { Job } from 'bullmq';
+import { report } from 'process';
 
 // Initialize OpenAI client (Base configuration)
 const openai = new OpenAI({
@@ -18,14 +19,43 @@ const openai = new OpenAI({
   }
 });
 
+// Helper to wait/delay
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// --- 1. ADD THIS HELPER FUNCTION ---
+// Removes leading numbers, dots, and whitespace to create a "clean" signature for comparison
+// e.g. "1. Memahami..." -> "memahami..."
+// e.g. "KB 1.1: Identifikasi..." -> "identifikasi..."
+const normalizeKb = (str: string) => {
+  // Remove leading "KB", numbers, dots, dashes, and whitespace
+  return str
+    .replace(/^(kb|key\s*behavior)?[\d\w\.\-\s]+/i, '') 
+    .trim()
+    .toLowerCase();
+};
+
 // Check Cancellation
-async function checkCancellation(reportId: string, userId: string) {
-    const res = await query("SELECT status FROM reports WHERE id = $1", [reportId]);
-    if (res.rows.length === 0 || res.rows[0].status !== 'PROCESSING') {
+async function checkCancellation(reportId: string, userId: string, currentJobId?: string) {
+    const res = await query("SELECT status, active_job_id FROM reports WHERE id = $1", [reportId]);
+    
+    // 1. Report Deleted or Missing
+    if (res.rows.length === 0) throw new Error("CANCELLED_BY_USER");
+    
+    const { status, active_job_id } = res.rows[0];
+
+    // 2. Status Check (Must be PROCESSING)
+    if (status !== 'PROCESSING') {
         await publishEvent(userId, 'ai-stream', { 
             reportId, 
-            chunk: `\n⛔ Process cancelled by user (or status changed). Aborting job.\n` 
+            chunk: `\n⛔ Process stopped (Status: ${status}). Aborting job.\n` 
         });
+        throw new Error("CANCELLED_BY_USER");
+    }
+
+    // 3. Identity Check (Zombie Protection)
+    // If the DB has a different active Job ID than us, we are obsolete.
+    if (currentJobId && active_job_id && String(active_job_id) !== String(currentJobId)) {
+        console.warn(`[Worker] Job ${currentJobId} aborted. New job ${active_job_id} has taken over.`);
         throw new Error("CANCELLED_BY_USER");
     }
 }
@@ -46,8 +76,10 @@ const ResultSchema = z.object({
 });
 
 export async function runPhase1Generation(reportId: string, userId: string, job: Job) {
+  const currentJobId = job.id;
+  if (!currentJobId) throw new Error("Job ID missing");
   try {
-    await checkCancellation(reportId, userId);
+    await checkCancellation(reportId, userId, currentJobId);
   } catch (e: any) {
     if (e.message === "CANCELLED_BY_USER") {
       console.log(`[Worker] Retry aborted for ${reportId}: Job was cancelled.`);
@@ -55,7 +87,7 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
     }
     throw e;
   }
-  
+
   const attemptsMade = job.attemptsMade;
   const isBackupTry = attemptsMade >= 3;
   const providerLabel = isBackupTry ? "Backup LLM" : "Main LLM";
@@ -144,29 +176,29 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
 
     // RESUME LOGIC START (in the event of failure)
     // Check which competencies already generated evidence
-    const existingRes = await query (
-      'SELECT DISTINCT competency FROM evidence WHERE report_id = $1 AND is_ai_generated = true',
+    const existingRes = await query(
+      `SELECT competency, level, source 
+        FROM evidence 
+        WHERE report_id = $1 AND is_ai_generated = true`,
       [reportId]
     );
-    const completedCompetencies = new Set(existingRes.rows.map(r => r.competency));
 
-    // Filter the dictionary
-    const competenciesToProcess = dictionary.kompetensi.filter((comp: any) => {
-      const cName = comp.name || comp.namaKompetensi;
-      return !completedCompetencies.has(cName);
-    });
+    // Create a Set of "signatures" for fast lookup
+    // Format: "CompetencyName|Level|SourceTag"
+    const completedUnits = new Set(
+      existingRes.rows.map(r => `${r.competency}|${r.level}|${r.source}`)
+    );
 
-    if (completedCompetencies.size > 0 && competenciesToProcess.length > 0) {
+    if (completedUnits.size > 0) {
+      console.log(`[Worker] Found ${completedUnits.size} completed evidence units. Resuming...`);
       await publishEvent(userId, 'ai-stream', {
-        reportId,
-        chunk: `\n⏩ Resuming: Found ${completedCompetencies.size} completed competencies. Processing remaining ${competenciesToProcess.length}...\n`
-      });
-    } else if (completedCompetencies.size > 0 && competenciesToProcess.length === 0) {
-      await publishEvent(userId, 'ai-stream', { 
-        reportId, 
-        chunk: `\n✅ All competencies already analyzed.\n` 
+          reportId,
+          chunk: `\n⏩ Resuming: Found ${completedUnits.size} completed evidence blocks.\n`
       });
     }
+
+    // We now process ALL competencies, but we will skip specific parts inside the loop
+    const competenciesToProcess = dictionary.kompetensi;
 
     let totalEvidenceCount = 0;
 
@@ -180,21 +212,13 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
     for (const comp of competenciesToProcess) {
       // Check cancellation before starting a new competency
       try {
-        await checkCancellation(reportId, userId);
+        await checkCancellation(reportId, userId, currentJobId);
       } catch (e: any) {
         if (e.message === "CANCELLED_BY_USER") return { status: 'CANCELLED' };
         throw e;
       }
 
       const compName = comp.name || comp.namaKompetensi || "Unknown Competency";
-
-      // Clear old AI evidence for this competency before starting
-      await poolClient.query('BEGIN');
-      await poolClient.query(
-        'DELETE FROM evidence WHERE report_id = $1 AND competency = $2 AND is_ai_generated = true',
-        [reportId, compName]
-      );
-      await poolClient.query('COMMIT');
 
       // Loop 2: File (Source)
       for (const file of filesRes.rows) {
@@ -204,8 +228,28 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
 
         // Loop 3: Level
         for (const levelObj of comp.level) {
-          const levelNum = levelObj.nomor;
+          const levelNum = String(levelObj.nomor);
 
+          // If this exact unit is in our "completedUnits" set, skip it entirely.
+          const unitSignature = `${compName}|${levelNum}|${sourceTag}`;
+
+          if (completedUnits.has(unitSignature)) {
+            continue; 
+          }
+
+          // (Check before starting the expensive database delete or AI call)
+          await checkCancellation(reportId, userId, currentJobId);
+
+          // We delete ONLY this specific unit to ensure we don't have partial duplicates from a previous crash.
+          await poolClient.query('BEGIN');
+          await poolClient.query(
+            `DELETE FROM evidence 
+             WHERE report_id = $1 AND competency = $2 AND level = $3 AND source = $4 AND is_ai_generated = true`,
+            [reportId, compName, levelNum, sourceTag]
+          );
+          await poolClient.query('COMMIT');
+
+          // Notify User
           await publishEvent(userId, 'ai-stream', {
             reportId,
             chunk: `\n🔍 Analyzing: ${compName} | Level ${levelNum} | Source: ${sourceTag}...\n`
@@ -248,7 +292,7 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
             {
               "evidence": [
                 {
-                  "kb": "Full text of the Key Behavior matched",
+                  "kb": "Full text of the Key Behavior matched (should include the number, e.g. "1. Memahami keterkaitan produk..")",
                   "quote": "Exact quote from text",
                   "reasoning": "Explanation"
                 }
@@ -258,27 +302,56 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
 
             // Call AI
             const options: any = { temperature };
-            if (model.includes('o1')) delete options.temperature;
+            if (model.includes('gpt')) delete options.temperature;
 
-            const stream = await openai.chat.completions.create({
-              model: model,
-              messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt },
-              ],
-              response_format: { type: "json_object" },
-              stream: true,
-              ...options
-            }) as unknown as Stream<ChatCompletionChunk>;
+            // Instant Cancellation Setup
+            const controller = new AbortController();
+
+            // Set up a periodic check *during* the stream (The Heartbeat)
+            const checkInterval = setInterval(async () => {
+              try {
+                // Silently check DB status. If failed, it throws.
+                await checkCancellation(reportId, userId, currentJobId);
+              } catch (err) {
+                // If cancelled, kill the OpenAI connection immediately
+                controller.abort();
+                clearInterval(checkInterval);
+              }
+            }, 1500);
 
             let fullResponse = "";
 
-            for await (const chunk of stream) {
-              const content = chunk.choices[0]?.delta?.content || "";
-              if (content) {
-                fullResponse += content;
-                await publishEvent(userId, 'ai-stream', { reportId, chunk: content });
+            try {
+              const stream = await openai.chat.completions.create({
+                model: model,
+                messages: [
+                  { role: "system", content: systemPrompt },
+                  { role: "user", content: userPrompt },
+                ],
+                response_format: { type: "json_object" },
+                stream: true,
+                strict: true,
+                ...options
+              }, { signal: controller.signal }) as unknown as Stream<ChatCompletionChunk>;
+
+              for await (const chunk of stream) {
+                const content = chunk.choices[0]?.delta?.content || "";
+                if (content) {
+                  fullResponse += content;
+                  await publishEvent(userId, 'ai-stream', { reportId, chunk: content });
+                }
               }
+
+              clearInterval(checkInterval);
+
+            } catch (err: any) {
+              clearInterval(checkInterval);
+
+              // If it was an abort error, throw the specific cancellation message
+              if (err.name === 'AbortError' || err.message === "CANCELLED_BY_USER") {
+                  throw new Error("CANCELLED_BY_USER");
+              }
+              throw err;
             }
 
             // --- PARSE & SAVE ---
@@ -297,6 +370,26 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
                   const quote = item.quote || item.Quote || item.evidence || "";
                   if (!quote) continue;
 
+                  let kbText = item.kb || item.KB || "General Evidence";
+
+                  // Try to find the official matching string from the dictionary
+                  if (levelObj.keyBehavior && Array.isArray(levelObj.keyBehavior)) {
+                      const aiClean = normalizeKb(kbText);
+                      
+                      // Find match in the official list
+                      const match = levelObj.keyBehavior.find((canonical: string) => {
+                          const canonicalClean = normalizeKb(canonical);
+                          // Check for exact match of text content OR if one contains the other
+                          // (e.g. AI truncated end or Dictionary has extra context)
+                          return canonicalClean === aiClean || 
+                                 (aiClean.length > 10 && canonicalClean.includes(aiClean));
+                      });
+
+                      if (match) {
+                          kbText = match; // Swap AI text for the Official Dictionary Text
+                      }
+                  }
+
                   await poolClient.query(
                     `INSERT INTO evidence (report_id, competency, level, kb, quote, source, reasoning, is_ai_generated)
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
@@ -304,7 +397,7 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
                       reportId,
                       compName,
                       String(levelNum),
-                      item.kb || item.KB || "General Evidence",
+                      kbText,
                       quote,
                       sourceTag,
                       item.reasoning || "",
@@ -344,6 +437,18 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
 
   } catch (error: any) {
     await poolClient.query('ROLLBACK');
+
+    // 1. Handle Cancellation Gracefully
+    if (error.message === "CANCELLED_BY_USER" || error.name === 'AbortError') {
+      console.log(`[Worker] Job ${currentJobId} cancelled by user.`);
+      
+      await publishEvent(userId, 'generation-cancelled', {
+        reportId,
+        message: "AI Generation stopped safely."
+      });
+
+      return { status: 'CANCELLED' };
+    }
     console.error(`[Worker] 🚨 Global Error:`, error.message);
 
     if (attemptsMade >= 5) {
@@ -353,7 +458,7 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
       });
     } else {
         try {
-          await checkCancellation(reportId, userId);
+          await checkCancellation(reportId, userId, currentJobId);
         } catch (e: any) {
           if (e.message === "CANCELLED_BY_USER") 
             return { status: 'CANCELLED' }; 
