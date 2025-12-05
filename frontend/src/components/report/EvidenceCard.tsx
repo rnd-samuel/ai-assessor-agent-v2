@@ -9,6 +9,7 @@ export interface EvidenceCardData {
   quote: string;
   source: string;
   reasoning: string;
+  is_ai_generated: boolean;
 }
 
 interface EvidenceCardProps {
@@ -60,7 +61,19 @@ export default function EvidenceCard({
         <div>
           <div className="p-3 border-b border-border/50 bg-bg-medium/30">
             <div className="flex justify-between items-start mb-1">
+              <div className="flex items-center gap-2">
                <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">{competencyName}</p>
+               {/* UI Badge */}
+               {evidence.is_ai_generated ? (
+                 <span title="AI Generated" className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200 flex items-center gap-1">
+                  ✨ AI
+                 </span>
+               ) : (
+                <span title="Manually Created" className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200 flex items-center gap-1">
+                  👤 Manual
+                </span>
+               )}
+              </div>
                <span className="flex-shrink-0 inline-flex items-center justify-center w-8 h-8 rounded bg-white border border-border text-xl font-bold text-primary shadow-sm ml-2">
                  {evidence.level}
                </span>

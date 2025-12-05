@@ -116,7 +116,7 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
         await publishEvent(userId, 'ai-stream', { reportId, chunk: `⚠️ Main LLM failed 3 times. Switching to Backup LLM setup...\n` });
       }
     } else {
-      model = aiConfig.mainLLM || "google/gemini-2.5-flash-lite-preview-09-2025";
+      model = aiConfig.judgmentLLM || "google/gemini-2.5-flash-lite-preview-09-2025";
       temperature = aiConfig.mainTemp ?? 0.3;
     }
     
@@ -331,12 +331,22 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
                 response_format: { type: "json_object" },
                 stream: true,
                 strict: true,
+                max_tokens: 4000,
                 ...options
               }, { signal: controller.signal }) as unknown as Stream<ChatCompletionChunk>;
+
+              let accumulatedLength = 0;
+              const MAX_SAFE_LENGTH = 15000;
 
               for await (const chunk of stream) {
                 const content = chunk.choices[0]?.delta?.content || "";
                 if (content) {
+                  accumulatedLength += content.length;
+                  // SANITY CHECK: If we generated massive text but haven't closed JSON
+                  if (accumulatedLength > MAX_SAFE_LENGTH) {
+                    controller.abort();
+                    throw new Error("Response too long (Hallucination detected). Retrying...");
+                  }
                   fullResponse += content;
                   await publishEvent(userId, 'ai-stream', { reportId, chunk: content });
                 }

@@ -84,7 +84,7 @@ const aiWorker = new Worker('ai-generation', async (job) => {
   }
 
   if (job.name === 'generate-phase-2') {
-    return runPhase2Generation(job.data.reportId, userId);
+    return runPhase2Generation(job.data.reportId, userId, job);
   }
 
   if (job.name === 'generate-phase-3') {

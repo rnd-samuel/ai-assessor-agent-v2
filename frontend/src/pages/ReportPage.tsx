@@ -15,6 +15,7 @@ import CompetencyAnalysisList from '../components/report/CompetencyAnalysisList'
 import ExecutiveSummary from '../components/report/ExecutiveSummary'; // Child 2
 import { type CompetencyAnalysisData } from '../components/report/CompetencyAnalysisCard'; // Import Type
 import UnsavedChangesModal from '../components/UnsavedChangesModal';
+import ThinkingPanel from '../components/report/ThinkingPanel';
 
 // --- Data Types ---
 interface ReportData {
@@ -334,6 +335,8 @@ export default function ReportPage() {
   const isAnalysisLocked = highestPhaseVisible === 'summary';
 
   const activeFile = reportData?.rawFiles.find(f => f.id === activeFileId);
+
+  const isUserClicking = useRef(false);
   
   // --- Data Fetching ---
   const fetchReportData = useCallback(async (isBackground = false) => {
@@ -439,9 +442,6 @@ export default function ReportPage() {
     // 2. AI Streaming (Point #5)
     const onAiStream = (data: { reportId: string, chunk: string }) => {
         if (data.reportId === reportId) {
-            if (reportData?.status === 'FAILED' || reportData?.status === 'COMPLETED') {
-                return;
-            }
             setIsThinking(true);
             setStreamLog(prev => prev + data.chunk);
             
@@ -657,11 +657,13 @@ export default function ReportPage() {
 
   // --- Handlers ---
   const handleHighlight = (evidence: EvidenceCardData) => {
+    isUserClicking.current = true;
     const targetFile = reportData?.rawFiles.find(f => f.simulation_method_tag === evidence.source);
     if (targetFile) {
         setActiveFileId(targetFile.id);
         setActiveEvidenceId(evidence.id);
         setActiveQuote(evidence.quote);
+        setTimeout(() => { isUserClicking.current = false; }, 1000);
     } else {
         addToast("Source file for this evidence not found.", 'error');
     }
@@ -746,10 +748,7 @@ export default function ReportPage() {
     try {
       // 1. Call the new endpoint to start the job
       await apiService.post(`/reports/${reportId}/generate/phase2`);
-
-
       addToast("Phase 2 analysis started...", 'info');
-
       // 2. Reveal the next tab (UI Logic)
       // In a real app with sockets, we might wait for the 'complete' event.
       // For now, we switch immediately to show the "Processing" or empty state.
@@ -968,7 +967,10 @@ const blocker = useBlocker(
                     activeQuote={activeQuote}
                     onTextSelection={handleTextSelection}
                     onQuoteNotFound={() => {
+                      if (isUserClicking.current) {
                         addToast("Could not locate this evidence text. It might be paraphrased.", 'error');
+                        isUserClicking.current = false;
+                      }
                     }}
                 />
                 <div className="bg-bg-medium p-2 border-t border-border text-xs text-text-muted flex justify-between items-center flex-shrink-0">
@@ -1054,6 +1056,7 @@ const blocker = useBlocker(
                         onAskAI={handleAskAI}
                         data={competencyData}
                         isLastPhase={reportData?.targetPhase === 2}
+                        reportStatus={reportData?.status || 'CREATED'}
                         onChange={(newData) => {
                           setCompetencyData(newData);
                           setIsDirty(true);
@@ -1195,6 +1198,9 @@ const blocker = useBlocker(
           onLeave={() => blocker.proceed()}
         />
       )}
+
+      {/* --- FLOATING THINKING PANEL --- */}
+      {isThinking && <ThinkingPanel log={streamLog} />}
     </div>
   );
 }

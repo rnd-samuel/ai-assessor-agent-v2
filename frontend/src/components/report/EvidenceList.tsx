@@ -2,7 +2,6 @@
 import { useState, useMemo } from 'react';
 import EvidenceCard, { type EvidenceCardData } from './EvidenceCard';
 import LoadingButton from '../LoadingButton';
-import ThinkingPanel from './ThinkingPanel';
 import * as XLSX from 'xlsx';
 import { useToastStore } from '../../state/toastStore';
 
@@ -55,8 +54,6 @@ export default function EvidenceList({
   onCreate,
   reportStatus,
   targetPhase,
-  isThinking,
-  streamLog,
   isResetting,
   onGeneratePhase1,
   onGenerateNext,
@@ -68,6 +65,7 @@ export default function EvidenceList({
     competency: '',
     level: '',
     source: '',
+    origin: '',
   });
 
   const addToast = useToastStore((state) => state.addToast);
@@ -107,10 +105,15 @@ export default function EvidenceList({
   const filteredEvidence = useMemo(() => {
     // A. Filter First
     const filtered = evidence.filter((ev) => {
+      const originMatch = 
+        filters.origin === '' ? true :
+        filters.origin === 'AI' ? ev.is_ai_generated === true :
+        ev.is_ai_generated !== true;
       return (
         (filters.competency === '' || ev.competency === filters.competency) &&
         (filters.level === '' || ev.level === filters.level) &&
-        (filters.source === '' || ev.source === filters.source)
+        (filters.source === '' || ev.source === filters.source) &&
+        originMatch
       );
     });
 
@@ -260,9 +263,21 @@ export default function EvidenceList({
                         ))}
                       </select>
                     </div>
+                    <div>
+                      <label className="text-xs font-semibold text-text-secondary mb-1 block">Created by</label>
+                      <select
+                        className="w-full text-sm border border-border rounded px-2 py-1"
+                        value={filters.origin}
+                        onChange={(e) => setFilters({ ...filters, origin: e.target.value })}
+                      >
+                        <option value="">All</option>
+                        <option value="AI">AI Generated</option>
+                        <option value="MANUAL">Manual</option>
+                      </select>
+                    </div>
                     <button 
                         className="w-full text-xs text-primary hover:underline pt-2 text-center"
-                        onClick={() => setFilters({ competency: '', level: '', source: '' })}
+                        onClick={() => setFilters({ competency: '', level: '', source: '', origin: '' })}
                     >
                         Clear Filters
                     </button>
@@ -399,9 +414,6 @@ export default function EvidenceList({
           </button>
         )}
       </div>
-      {/* FLOATING THINKING PANEL */}
-      {/* It sits on top of everything but doesn't block interaction with the list */}
-      {isThinking && <ThinkingPanel log={streamLog} />}
 
       {/* --- Skip Confirmation Modal --- */}
       {isSkipModalOpen && (

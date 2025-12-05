@@ -12,6 +12,7 @@ interface CompetencyAnalysisListProps {
   data: CompetencyAnalysisData[];
   onChange: (newData: CompetencyAnalysisData[]) => void;
   isLastPhase: boolean;
+  reportStatus: 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 }
 
 export default function CompetencyAnalysisList({
@@ -21,7 +22,8 @@ export default function CompetencyAnalysisList({
   onAskAI,
   data,
   onChange,
-  isLastPhase
+  isLastPhase,
+  reportStatus
 }: CompetencyAnalysisListProps) {
   
   // Filters
@@ -137,6 +139,14 @@ export default function CompetencyAnalysisList({
                 Generate Final Summary &rarr;
              </LoadingButton>
          )}
+
+        {/* Show "Processing..." disabled button if active */}
+        {reportStatus === 'PROCESSING' && (
+          <button disabled className="bg-bg-medium text-text-muted rounded-md text-sm font-semibold px-4 py-2 cursor-not-allowed opacity-70 flex items-center gap-2">
+            <div className="animate-spin h-3 w-3 border-2 border-current border-t-transparent rounded-full"></div>
+            AI Working...
+          </button>
+        )}
       </div>
     </div>
   );

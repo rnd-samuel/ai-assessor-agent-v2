@@ -126,9 +126,10 @@ export default function AdminPanelPage() {
   
   // AI Config State
   const [aiConfig, setAiConfig] = useState({
-    mainLLM: 'openrouter/google/gemini-2.5-pro-preview',
+    judgmentLLM: 'google/gemini-2.5-flash-lite-preview-09-2025',
+    narrativeLLM: 'google/gemini-3-pro-preview',
     backupLLM: 'openrouter/openai/gpt-5.1',
-    mainTemp: 0.5,
+    judgmentTemp: 0.5,
     backupTemp: 0.5,
     askAiEnabled: true,
     askAiLLM: 'openrouter/google/gemini-2.5-flash',
@@ -1096,19 +1097,30 @@ export default function AdminPanelPage() {
                 {/* Main LLM */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
-                    <label className="block text-sm font-medium text-text-secondary mb-1">Main LLM</label>
+                    <label className="block text-sm font-medium text-text-secondary mb-1">Judgment LLM</label>
                     <SearchableSelect
                       options={aiModelsList.map(m => ({ value: m.id, label: m.id }))}
-                      value={aiConfig.mainLLM}
+                      value={aiConfig.judgmentLLM}
                       onChange={(val) => {
-                        setAiConfig({ ...aiConfig, mainLLM: val });
+                        setAiConfig({ ...aiConfig, judgmentLLM: val });
                         setIsDirty(true);
                       }}
                     />
                   </div>
                   <div>
-                     <label htmlFor="main-temp" className={`block text-sm font-medium mb-1 ${supportsTemperature(aiConfig.mainLLM) ? 'text-text-secondary' : 'text-text-muted'}`}>
-                        Temperature {supportsTemperature(aiConfig.mainLLM) ? '' : '(Not Supported)'}
+                    <label className="block text-sm font-medium text-text-secondary mb-1">Narrative LLM</label>
+                    <SearchableSelect
+                      options={aiModelsList.map(m => ({ value: m.id, label: m.id }))}
+                      value={aiConfig.narrativeLLM}
+                      onChange={(val) => {
+                        setAiConfig({ ...aiConfig, narrativeLLM: val });
+                        setIsDirty(true);
+                      }}
+                    />
+                  </div>
+                  <div>
+                     <label htmlFor="main-temp" className={`block text-sm font-medium mb-1 ${supportsTemperature(aiConfig.judgmentLLM) ? 'text-text-secondary' : 'text-text-muted'}`}>
+                        Temperature {supportsTemperature(aiConfig.judgmentLLM) ? '' : '(Not Supported)'}
                      </label>
                      <div className="flex items-center gap-4">
                         <input 
@@ -1116,14 +1128,14 @@ export default function AdminPanelPage() {
                           id="main-temp" 
                           min="0" max="1" step="0.1" 
                           className="w-full disabled:opacity-50"
-                          disabled={!supportsTemperature(aiConfig.mainLLM)}
-                          value={aiConfig.mainTemp} 
+                          disabled={!supportsTemperature(aiConfig.judgmentLLM)}
+                          value={aiConfig.judgmentTemp} 
                           onChange={(e) => {
-                            setAiConfig({...aiConfig, mainTemp: parseFloat(e.target.value)});
+                            setAiConfig({...aiConfig, judgmentTemp: parseFloat(e.target.value)});
                             setIsDirty(true);
                           }} 
                         />
-                        <span className="text-sm font-medium text-text-primary w-8 text-right">{aiConfig.mainTemp}</span>
+                        <span className="text-sm font-medium text-text-primary w-8 text-right">{aiConfig.judgmentTemp}</span>
                      </div>
                   </div>
                 </div>

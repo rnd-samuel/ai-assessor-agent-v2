@@ -13,6 +13,11 @@ const officeParser = require('officeparser');
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
+// Helper for matching (same as in ai-phase2-service.ts)
+const normalizeKb = (str: string) => {
+  return str.replace(/^(kb|key\s*behavior)?[\d\w\.\-\s]+/i, '').trim().toLowerCase();
+};
+
 interface AuthenticatedRequest extends Request {
   user?: {
     userId: string;
@@ -807,6 +812,99 @@ router.post('/:id/reset-status', authenticateToken, async (req: AuthenticatedReq
   } catch (error) {
     console.error("Error resetting status:", error);
     res.status(500).send({ message: "Internal server error" });
+  }
+});
+
+/**
+ * (MAINTENANCE) Repair/Hydrate Phase 2 Evidence
+ * Matches existing Phase 1 evidence to Phase 2 analysis cards without using AI.
+ */
+router.post('/:id/repair-evidence', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { id: reportId } = req.params;
+
+  try {
+    // 1. Fetch all Evidence for this report
+    const evidenceRes = await query(
+      `SELECT kb, quote, source, competency 
+       FROM evidence 
+       WHERE report_id = $1 AND is_archived = false`,
+      [reportId]
+    );
+    const allEvidence = evidenceRes.rows;
+
+    // 2. Fetch all Competency Analysis records
+    const analysisRes = await query(
+      `SELECT id, competency, key_behaviors_status 
+       FROM competency_analysis 
+       WHERE report_id = $1`,
+      [reportId]
+    );
+    
+    let updatedCount = 0;
+
+    // 3. Iterate and Inject
+    for (const row of analysisRes.rows) {
+      let keyBehaviors = row.key_behaviors_status;
+      
+      // Handle case where it might be a string (depending on pg driver config)
+      if (typeof keyBehaviors === 'string') {
+        keyBehaviors = JSON.parse(keyBehaviors);
+      }
+
+      if (!Array.isArray(keyBehaviors)) continue;
+
+      let hasChanges = false;
+
+      // Filter evidence for THIS competency only to reduce noise
+      const compEvidence = allEvidence.filter(e => 
+        e.competency.toLowerCase() === row.competency.toLowerCase()
+      );
+
+      const updatedKbs = keyBehaviors.map((kbItem: any) => {
+        // If evidence is already there, skip (or overwrite if you prefer)
+        if (kbItem.evidence && kbItem.evidence.length > 0) return kbItem;
+
+        const kbTextNormalized = normalizeKb(kbItem.kbText || "");
+
+        // FIND MATCHES
+        const matches = compEvidence.filter(ev => {
+            const evKbNormalized = normalizeKb(ev.kb);
+            // Fuzzy check: Exact match OR containment
+            return evKbNormalized === kbTextNormalized || 
+                   (kbTextNormalized.length > 10 && evKbNormalized.includes(kbTextNormalized)) ||
+                   (evKbNormalized.length > 10 && kbTextNormalized.includes(evKbNormalized));
+        }).map(ev => ({
+            quote: ev.quote,
+            source: ev.source
+        }));
+
+        if (matches.length > 0) {
+            hasChanges = true;
+            return { ...kbItem, evidence: matches };
+        }
+        return kbItem;
+      });
+
+      // 4. Save back if changed
+      if (hasChanges) {
+        await query(
+          `UPDATE competency_analysis 
+           SET key_behaviors_status = $1 
+           WHERE id = $2`,
+          [JSON.stringify(updatedKbs), row.id]
+        );
+        updatedCount++;
+      }
+    }
+
+    res.json({ 
+        message: `Repaired evidence for ${updatedCount} competency cards.`, 
+        totalMatches: allEvidence.length 
+    });
+
+  } catch (error) {
+    console.error("Repair failed:", error);
+    res.status(500).send({ message: "Internal server error during repair." });
   }
 });
 
