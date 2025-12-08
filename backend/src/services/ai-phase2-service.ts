@@ -91,6 +91,14 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
 
       const compName = comp.name || comp.namaKompetensi;
       const compId = comp.id || compName; 
+
+      // Filter Evidence
+      const relevantEvidence = allEvidence.filter((e: any) =>
+        e.competency.trim().toLowerCase() === compName.trim().toLowerCase()
+      );
+
+      // Sanity Log
+      console.log(`[Phase 2] Analyzing ${compName}: Found ${relevantEvidence.length} specific evidence items.`);
       
       // Get Target Level
       const targetLevel = parseInt(targetLevels[compId] || "3");
@@ -129,7 +137,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
               await checkCancellation(reportId, userId, currentJobId);
 
               levelJudgments[currentLevel] = await evaluateLevel(
-                  comp, currentLevel, allEvidence, judgmentModel, judgmentTemp, 
+                  comp, currentLevel, relevantEvidence, judgmentModel, judgmentTemp,
                   general_context, reportContext
               );
               
@@ -160,7 +168,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
               await checkCancellation(reportId, userId, currentJobId);
 
               levelJudgments[currentLevel] = await evaluateLevel(
-                  comp, currentLevel, allEvidence, judgmentModel, judgmentTemp, 
+                  comp, currentLevel, relevantEvidence, judgmentModel, judgmentTemp,
                   general_context, reportContext
               );
               
@@ -183,7 +191,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           if (n >= 1 && n <= 5 && !levelJudgments[n]) {
               await publishEvent(userId, 'ai-stream', { reportId, chunk: `> Context check: Assessing Level ${n}...\n` });
               levelJudgments[n] = await evaluateLevel(
-                  comp, n, allEvidence, judgmentModel, judgmentTemp, 
+                  comp, n, relevantEvidence, judgmentModel, judgmentTemp,
                   general_context, reportContext
               );
           }
@@ -282,7 +290,7 @@ function getScore(kbs: any[]) {
 async function evaluateLevel(
     comp: any, 
     level: number, 
-    allEvidence: any[], 
+    relevantEvidence: any[], 
     model: string, 
     temp: number,
     generalContext: string,
@@ -294,9 +302,18 @@ async function evaluateLevel(
     // FIX: Pass ALL evidence. The model is smart enough to pick what matters.
     // Filtering by string matching "Problem Solving" often fails if the quote 
     // is just tagged with "General" or if the Competency name varies slightly.
-    const evidenceText = allEvidence.map((e: any) => 
+    const evidenceText = relevantEvidence.map((e: any) => 
         `- [${e.competency}] "${e.quote}" (${e.source})`
     ).join('\n');
+
+    // --- DEBUG LOG START: What are we sending? ---
+    console.log(`\n--- DEBUG: INPUT for ${comp.name || comp.namaKompetensi} Level ${level} ---`);
+    console.log(`Evidence Count: ${relevantEvidence.length}`);
+    if (relevantEvidence.length > 0) {
+        console.log(`Sample Evidence:\n${evidenceText.slice(0, 500)}...`); // Print first 500 chars
+    } else {
+        console.log("⚠️ WARNING: Evidence string is EMPTY.");
+    }
 
     const prompt = `
     TASK: Judge if the candidate fulfilled the Key Behaviors for Level ${level}.
@@ -327,6 +344,14 @@ async function evaluateLevel(
         response_format: { type: "json_object" },
         temperature: temp
     });
+
+    const content = response.choices[0].message.content || "{}";
+    
+    // --- DEBUG LOG START: What did AI say? ---
+    console.log(`--- DEBUG: OUTPUT for Level ${level} ---`);
+    console.log(content); // Print the raw JSON
+    console.log(`------------------------------------------\n`);
+    // --- DEBUG LOG END ---
 
     const result = JSON.parse(response.choices[0].message.content || "{}");
     
