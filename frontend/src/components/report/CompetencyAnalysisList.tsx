@@ -7,6 +7,7 @@ interface CompetencyAnalysisListProps {
   reportId: string;
   isViewOnly: boolean;
   onGenerateNext: () => void;
+  onReset: () => void;
   onHighlightEvidence: (quote: string, source: string) => void;
   onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
   data: CompetencyAnalysisData[];
@@ -18,6 +19,7 @@ interface CompetencyAnalysisListProps {
 export default function CompetencyAnalysisList({
   isViewOnly,
   onGenerateNext,
+  onReset,
   onHighlightEvidence,
   onAskAI,
   data,
@@ -128,17 +130,25 @@ export default function CompetencyAnalysisList({
       </div>
 
       {/* Footer Actions */}
-      <div className="p-4 border-t border-border bg-bg-light flex justify-end">
-         {!isViewOnly && data.length > 0 && !isLastPhase && (
-             <LoadingButton
-                onClick={handleGenerateSummary}
-                isLoading={isGenerating}
-                loadingText="Generating..."
-                className="flex items-center gap-2"
-             >
-                Generate Final Summary &rarr;
-             </LoadingButton>
-         )}
+      <div className="p-4 border-t border-border bg-bg-light flex justify-end gap-3">
+        {reportStatus === 'PROCESSING' && (
+          <button
+            onClick={onReset}
+            className="text-xs text-error hover: underline font-medium"
+          >
+            Stop Generation
+          </button>
+        )}
+        {!isViewOnly && data.length > 0 && !isLastPhase && (
+          <LoadingButton
+            onClick={handleGenerateSummary}
+            isLoading={isGenerating}
+            loadingText="Generating..."
+            className="flex items-center gap-2"
+          >
+            Generate Final Summary &rarr;
+          </LoadingButton>
+        )}
 
         {/* Show "Processing..." disabled button if active */}
         {reportStatus === 'PROCESSING' && (

@@ -1052,6 +1052,7 @@ const blocker = useBlocker(
                             return handleGeneratePhase3();
                           }
                         }}
+                        onReset={handleReset}
                         onHighlightEvidence={handleQuoteSelection}
                         onAskAI={handleAskAI}
                         data={competencyData}

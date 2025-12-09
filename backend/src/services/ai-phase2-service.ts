@@ -11,28 +11,54 @@ const openai = new OpenAI({
   defaultHeaders: { "HTTP-Referer": "https://ai-assessor-agent.com", "X-Title": "AI Assessor Agent" }
 });
 
+// --- HELPER: Normalize KB for matching
+const normalizeKb = (str: string) => {
+  return str
+    .replace(/^(kb|key\s*behavior)?[\d\w\.\-\s]+/i, '') 
+    .trim()
+    .toLowerCase();
+};
+
 // --- HELPER: Cancellation Check ---
 async function checkCancellation(reportId: string, userId: string, currentJobId?: string) {
-    const res = await query("SELECT status, active_job_id FROM reports WHERE id = $1", [reportId]);
-    if (res.rows.length === 0) throw new Error("CANCELLED_BY_USER");
+  const res = await query("SELECT status, active_job_id FROM reports WHERE id = $1", [reportId]);
+  if (res.rows.length === 0) throw new Error("CANCELLED_BY_USER");
     
-    const { status, active_job_id } = res.rows[0];
+  const { status, active_job_id } = res.rows[0];
 
-    // Status Check
-    if (status !== 'PROCESSING') {
-        await publishEvent(userId, 'ai-stream', { 
-            reportId, 
-            chunk: `\n⛔ Process stopped (Status: ${status}). Aborting job.\n` 
-        });
-        throw new Error("CANCELLED_BY_USER");
-    }
+  // Status Check
+  if (status !== 'PROCESSING') {
+    await publishEvent(userId, 'ai-stream', { 
+      reportId, 
+      chunk: `\n⛔ Process stopped (Status: ${status}). Aborting job.\n` 
+    });
+    throw new Error("CANCELLED_BY_USER");
+  }
 
-    // Identity Check (Zombie Protection)
-    if (currentJobId && active_job_id && String(active_job_id) !== String(currentJobId)) {
-        console.warn(`[Worker] Job ${currentJobId} aborted. New job ${active_job_id} has taken over.`);
-        throw new Error("CANCELLED_BY_USER");
-    }
+  // Identity Check (Zombie Protection)
+  if (currentJobId && active_job_id && String(active_job_id) !== String(currentJobId)) {
+    console.warn(`[Worker] Job ${currentJobId} aborted. New job ${active_job_id} has taken over.`);
+    throw new Error("CANCELLED_BY_USER");
+  }
 }
+
+// Output Schema
+const LevelEvaluationSchema = z.object({
+  key_behaviors: z.array(z.object({
+    kb_text: z.string(),
+    fulfilled: z.boolean(),
+    reasoning: z.string(),
+  }))
+});
+
+const NarrativeSchema = z.object({
+  explanation: z.string(),
+  development_recommendations: z.object({
+    personal: z.string(),
+    assignment: z.string(),
+    training: z.string()
+  })
+});
 
 export async function runPhase2Generation(reportId: string, userId: string, job: Job) {
   const currentJobId = job.id;
@@ -84,6 +110,9 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
     // Clear old analysis
     await client.query('DELETE FROM competency_analysis WHERE report_id = $1', [reportId]);
 
+    // Configurable Threshold
+    const PASS_THRESHOLD = aiConfig.passThreshold || 0.75;
+
     // --- ORCHESTRATOR LOOP ---
     for (const comp of dictionary.kompetensi) {
       try { await checkCancellation(reportId, userId, currentJobId); }
@@ -103,6 +132,12 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       // Get Target Level
       const targetLevel = parseInt(targetLevels[compId] || "3");
 
+      // Dynamic Min/Max Levels
+      const availableLevels = comp.level.map((l: any) => parseInt(l.nomor)).sort((a: number, b: number) => a - b);
+      const MIN_LEVEL = availableLevels[0] || 1;
+      const MAX_LEVEL = availableLevels[availableLevels.length - 1] || 5;
+
+
       await publishEvent(userId, 'ai-stream', { 
           reportId, 
           chunk: `\n🔍 Analyzing Competency: **${compName}** (Target: ${targetLevel})\n` 
@@ -113,112 +148,78 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       // === STEP A: CHECK TARGET LEVEL ===
       await publishEvent(userId, 'ai-stream', { reportId, chunk: `> Checking Target Level ${targetLevel}...\n` });
       
-      // Pass ALL evidence to avoid filtering bugs
+      // Evaluate Target
       levelJudgments[targetLevel] = await evaluateLevel(
-          comp, targetLevel, allEvidence, judgmentModel, judgmentTemp, 
+          comp, targetLevel, relevantEvidence, judgmentModel, judgmentTemp,
           general_context, reportContext
       );
 
-      const targetFulfilledCount = levelJudgments[targetLevel].filter((k: any) => k.fulfilled).length;
-      const targetTotal = levelJudgments[targetLevel].length;
-      const targetPassed = (targetFulfilledCount / targetTotal) >= 0.5; 
-
-      // === STEP B: DETERMINE DIRECTION ===
-      let finalCalculatedLevel = 1; // Default floor
-      
-      if (!targetPassed) {
-          // --- GO DOWN ---
-          await publishEvent(userId, 'ai-stream', { reportId, chunk: `> Target not met (${targetFulfilledCount}/${targetTotal}). Checking lower levels...\n` });
-          
-          let currentLevel = targetLevel - 1;
-          let stopDown = false;
-
-          while (currentLevel >= 1 && !stopDown) {
-              await checkCancellation(reportId, userId, currentJobId);
-
-              levelJudgments[currentLevel] = await evaluateLevel(
-                  comp, currentLevel, relevantEvidence, judgmentModel, judgmentTemp,
-                  general_context, reportContext
-              );
-              
-              const fulfilled = levelJudgments[currentLevel].some((k: any) => k.fulfilled);
-              
-              if (fulfilled) {
-                  const pass = (levelJudgments[currentLevel].filter((k: any) => k.fulfilled).length / levelJudgments[currentLevel].length) >= 0.5;
-                  if (pass) {
-                      finalCalculatedLevel = currentLevel;
-                      stopDown = true; 
-                  }
-              }
-              
-              if (!stopDown) currentLevel--;
-          }
-
-      } else {
-          // --- GO UP ---
-          await publishEvent(userId, 'ai-stream', { reportId, chunk: `> Target met (${targetFulfilledCount}/${targetTotal}). Checking higher levels...\n` });
-          
-          finalCalculatedLevel = targetLevel; // It passed, so at least target is met
-          
-          let currentLevel = targetLevel + 1;
-          const maxLevel = 5; 
-          let stopUp = false;
-
-          while (currentLevel <= maxLevel && !stopUp) {
-              await checkCancellation(reportId, userId, currentJobId);
-
-              levelJudgments[currentLevel] = await evaluateLevel(
-                  comp, currentLevel, relevantEvidence, judgmentModel, judgmentTemp,
-                  general_context, reportContext
-              );
-              
-              const fulfilledCount = levelJudgments[currentLevel].filter((k: any) => k.fulfilled).length;
-              const total = levelJudgments[currentLevel].length;
-              
-              if ((fulfilledCount / total) >= 0.5) {
-                  finalCalculatedLevel = currentLevel;
-              } else {
-                  stopUp = true;
-              }
-              
-              if (!stopUp) currentLevel++;
-          }
+      // Check Downwards (Foundation Check)
+      // We ALWAYS check down to Level 1 to ensure no gaps (The "Anomaly" fix)
+      for (let l = targetLevel - 1; l >= 1; l--) {
+        await checkCancellation(reportId, userId, currentJobId);
+        await publishEvent(userId, 'ai-stream', { reportId, chunk: `> Verifying Foundation Level ${l}...\n` });
+        levelJudgments[l] = await evaluateLevel(
+          comp, l, relevantEvidence, judgmentModel, judgmentTemp,
+          general_context, reportContext
+        );
       }
 
-      // === STEP C: MANDATORY NEIGHBOR CHECK ===
-      const neighbors = [targetLevel - 1, targetLevel + 1];
-      for (const n of neighbors) {
-          if (n >= 1 && n <= 5 && !levelJudgments[n]) {
-              await publishEvent(userId, 'ai-stream', { reportId, chunk: `> Context check: Assessing Level ${n}...\n` });
-              levelJudgments[n] = await evaluateLevel(
-                  comp, n, relevantEvidence, judgmentModel, judgmentTemp,
-                  general_context, reportContext
-              );
-          }
+      // Check Upwards (Growth Check)
+      // We only check up if the Target (or current top) was passed.
+      let currentCeiling = targetLevel;
+      let keepCheckingUp = isLevelPassed(levelJudgments[targetLevel], PASS_THRESHOLD);
+
+      while (keepCheckingUp && currentCeiling < 5) {
+        const nextLevel = currentCeiling + 1;
+        await checkCancellation(reportId, userId, currentJobId);
+        await publishEvent(userId, 'ai-stream', { reportId, chunk: `> Exploring Potential Level ${nextLevel}...\n` });
+
+        levelJudgments[nextLevel] = await evaluateLevel(
+          comp, nextLevel, relevantEvidence, judgmentModel, judgmentTemp,
+          general_context, reportContext
+        );
+
+        if (isLevelPassed(levelJudgments[nextLevel], PASS_THRESHOLD)) {
+          currentCeiling = nextLevel;
+        } else {
+          keepCheckingUp = false;
+        }
       }
 
-      // === STEP D: EDGE CASE DETECTION ===
+      // === STEP B: CALCULATE FINAL LEVEL ===
+      // Rule: Final Level = The highest level N where Levels 1..N are ALL passed.
+
+      let finalCalculatedLevel = 0;
+      for (const l of availableLevels) {
+        if (!levelJudgments[l]) break;
+        if (isLevelPassed(levelJudgments[l], PASS_THRESHOLD)) {
+          finalCalculatedLevel = 1;
+        } else {
+          break;
+        }
+      }
+      // If even Level 1 failed, score is 0
+
+      // Detect Anomaly for Narrative
       let anomalyDetected = false;
-      const levels = Object.keys(levelJudgments).map(Number).sort((a,b) => a-b);
-      for (let i = 0; i < levels.length - 1; i++) {
-          const lower = levels[i];
-          const higher = levels[i+1];
-          const scoreLow = getScore(levelJudgments[lower]);
-          const scoreHigh = getScore(levelJudgments[higher]);
+      const sortedLevels = Object.keys(levelJudgments).map(Number).sort((a,b) => a-b);
+      for (let i = 0; i < sortedLevels.length - 1; i++) {
+        const lower = sortedLevels[i];
+        const higher = sortedLevels[i+1];
+        if (!isLevelPassed(levelJudgments[lower], PASS_THRESHOLD) && isLevelPassed(levelJudgments[higher], PASS_THRESHOLD)) {
+          anomalyDetected = true;
+        }
+      }
 
-          if (scoreHigh > 0.5 && scoreLow < 0.2) {
-              anomalyDetected = true;
-              await publishEvent(userId, 'ai-stream', { 
-                  reportId, 
-                  chunk: `⚠️ Anomaly: Level ${higher} score is higher than Level ${lower}.\n` 
-              });
-          }
+      if (anomalyDetected) {
+        await publishEvent(userId, 'ai-stream', { reportId, chunk: `⚠️ Consistency Warning: Higher levels met while lower levels missed. Adjusting score to robust foundation.\n` });
       }
 
       // === STEP E: NARRATIVE GENERATION ===
       await publishEvent(userId, 'ai-stream', { reportId, chunk: `> Writing final analysis...\n` });
       
-      const narrative = await generateNarrative(
+      const narrativeData = await generateNarrative(
           compName, 
           finalCalculatedLevel, 
           targetLevel, 
@@ -230,6 +231,11 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           anomalyDetected
       );
 
+      // Format recommendations for DB (Text)
+      const formattedRecs = `**Personal Development:**\n${narrativeData.development_recommendations.personal}\n\n` +
+                            `**Assignment:**\n${narrativeData.development_recommendations.assignment}\n\n` +
+                            `**Training:**\n${narrativeData.development_recommendations.training}`;
+
       // === STEP F: SAVE ===
       const flatKbs = [];
       for (const [lvl, kbs] of Object.entries(levelJudgments)) {
@@ -238,7 +244,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
               kbText: k.kbText,
               fulfilled: k.fulfilled,
               explanation: k.reasoning,
-              evidence: k.evidence_used.map((q: string) => ({ quote: q, source: "AI Selected" }))
+              evidence: k.realEvidence
           })));
       }
 
@@ -250,8 +256,8 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           reportId, 
           compName, 
           String(finalCalculatedLevel),
-          narrative.explanation + (anomalyDetected ? "\n\n[SYSTEM FLAG: Inconsistent scoring detected.]" : ""),
-          narrative.development_recommendations, 
+          narrativeData.explanation + (anomalyDetected ? "\n\n[SYSTEM FLAG: Inconsistent scoring detected.]" : ""),
+          formattedRecs,
           JSON.stringify(flatKbs)
         ]
       );
@@ -282,15 +288,16 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
 
 // --- HELPERS ---
 
-function getScore(kbs: any[]) {
-    if (!kbs || kbs.length === 0) return 0;
-    return kbs.filter(k => k.fulfilled).length / kbs.length;
+function isLevelPassed(kbs: any[], threshold: number) {
+    if (!kbs || kbs.length === 0) return false;
+    const fulfilledCount = kbs.filter(k => k.fulfilled).length;
+    return (fulfilledCount / kbs.length) >= threshold;
 }
 
 async function evaluateLevel(
     comp: any, 
     level: number, 
-    relevantEvidence: any[], 
+    allRelevantEvidence: any[],
     model: string, 
     temp: number,
     generalContext: string,
@@ -299,21 +306,10 @@ async function evaluateLevel(
     const lvlObj = comp.level.find((l: any) => String(l.nomor) === String(level));
     if (!lvlObj) return [];
 
-    // FIX: Pass ALL evidence. The model is smart enough to pick what matters.
-    // Filtering by string matching "Problem Solving" often fails if the quote 
-    // is just tagged with "General" or if the Competency name varies slightly.
-    const evidenceText = relevantEvidence.map((e: any) => 
-        `- [${e.competency}] "${e.quote}" (${e.source})`
+    // Pass reasoning from Phase 1 to give the "Judge" context
+    const contextEvidenceText = allRelevantEvidence.map((e: any) =>
+        `- Quote: "${e.quote}"\n  Context from Phase 1: ${e.reasoning}` 
     ).join('\n');
-
-    // --- DEBUG LOG START: What are we sending? ---
-    console.log(`\n--- DEBUG: INPUT for ${comp.name || comp.namaKompetensi} Level ${level} ---`);
-    console.log(`Evidence Count: ${relevantEvidence.length}`);
-    if (relevantEvidence.length > 0) {
-        console.log(`Sample Evidence:\n${evidenceText.slice(0, 500)}...`); // Print first 500 chars
-    } else {
-        console.log("⚠️ WARNING: Evidence string is EMPTY.");
-    }
 
     const prompt = `
     TASK: Judge if the candidate fulfilled the Key Behaviors for Level ${level}.
@@ -326,16 +322,28 @@ async function evaluateLevel(
     LEVEL DEFINITION: ${lvlObj.penjelasan}
     
     CANDIDATE EVIDENCE:
-    ${evidenceText || "No specific evidence recorded."}
+    ${contextEvidenceText || "No specific evidence recorded."}
     
     KEY BEHAVIORS TO CHECK:
     ${lvlObj.keyBehavior.map((kb: string, i: number) => `${i+1}. ${kb}`).join('\n')}
     
     INSTRUCTIONS:
-    - For EACH Key Behavior, decide true/false based on the evidence.
-    - If evidence supports it, set fulfilled: true.
-    - If NO evidence supports it, set fulfilled: false.
-    - Return valid JSON.
+    - You are a strict assessor.
+    - Evaluate EACH Key Behavior.
+    - Return a JSON object with a single key "key_behaviors".
+    - "key_behaviors" must be an array of objects.
+    
+    REQUIRED JSON STRUCTURE:
+    {
+      "key_behaviors": [
+        {
+          "kb_text": "The full text of the key behavior",
+          "fulfilled": true/false,
+          "reasoning": "Why you made this decision",
+          "evidence_used": ["Quote 1", "Quote 2"]
+        }
+      ]
+    }
     `;
 
     const response = await openai.chat.completions.create({
@@ -345,26 +353,51 @@ async function evaluateLevel(
         temperature: temp
     });
 
-    const content = response.choices[0].message.content || "{}";
-    
-    // --- DEBUG LOG START: What did AI say? ---
-    console.log(`--- DEBUG: OUTPUT for Level ${level} ---`);
-    console.log(content); // Print the raw JSON
-    console.log(`------------------------------------------\n`);
-    // --- DEBUG LOG END ---
+    const rawContent = response.choices[0].message.content || "{}";
+    let parsedJson;
+    try {
+      parsedJson = JSON.parse(rawContent);
+    } catch (e) {
+      throw new Error("AI returned invalid JSON");
+    }
 
-    const result = JSON.parse(response.choices[0].message.content || "{}");
-    
+    // Validate against Schema
+    const validation = LevelEvaluationSchema.safeParse(parsedJson);
+
+    if (!validation.success) {
+      console.error("Schema Validation Failed:", validation.error);
+      throw new Error("AI returned JSON matching the wrong schema (Schema Drift).");
+    }
+
+    // Return clean data
+    const result = validation.data;
+
+    // Map to internal format
     return lvlObj.keyBehavior.map((kbText: string, i: number) => {
-        const list = result.key_behaviors || result.keyBehaviors || [];
-        const aiRes = list[i] || {};
-        
-        return {
-            kbText,
-            fulfilled: aiRes.fulfilled || false,
-            reasoning: aiRes.reasoning || "No evidence found",
-            evidence_used: aiRes.evidence_used || []
-        };
+      // Try to find the matching KB in the AI output by index or text
+      // Since we ask for an array, usually index alignment is safest if AI follows instructions
+      // But let's look for a text match or fallback to index
+      const aiRes = result.key_behaviors[i] || {};
+
+      // Manual Evidence Mapping
+      const normKb = normalizeKb(kbText);
+
+      const matchingEvidence = allRelevantEvidence.filter((ev: any) => {
+        const normEvKb = normalizeKb(ev.kb);
+        return normEvKb === normKb ||
+          (normKb.length > 10 && normEvKb.includes(normKb)) ||
+          (normEvKb.length > 10 && normKb.includes(normEvKb));
+      }).map(ev => ({
+        quote: ev.quote,
+        source: ev.source
+      }));
+
+      return {
+        kbText,
+        fulfilled: aiRes.fulfilled || false,
+        reasoning: aiRes.reasoning || "No evidence found",
+        realEvidence: matchingEvidence
+      };
     });
 }
 
@@ -380,6 +413,11 @@ async function generateNarrative(
     anomaly: boolean
 ) {
     let summaryText = `Candidate achieved Level ${finalLevel} (Target: ${targetLevel}).\n\n`;
+
+    // Add anomaly note to context
+    if (anomaly) {
+        summaryText += "NOTE: The candidate displayed behaviors of higher levels but failed some lower foundational levels. The score was capped to ensure consistency.\n";
+    }
     
     for (const [lvl, kbs] of Object.entries(judgments)) {
         summaryText += `Level ${lvl}:\n`;
@@ -402,15 +440,23 @@ async function generateNarrative(
     ${summaryText}
     
     TASK:
-    1. Write a cohesive 'explanation' justifying the Level ${finalLevel}.
-    2. Write 'development_recommendations' to close the gap (or maintain performance).
+    1. Write a cohesive 'explanation' justifying the Final Level ${finalLevel}. Address the gap if Target (${targetLevel}) was not met.
+    2. Write 'development_recommendations' to close the gap (or maintain performance) categorized exactly as requested..
     
     IMPORTANT: You MUST categorize recommendations into these 3 specific sections:
     - **Personal Development**: Actionable steps the individual can take alone.
     - **Assignment**: Tasks or projects assigned by a supervisor.
     - **Training**: Formal learning (workshops, courses).
     
-    Return JSON: { "explanation": "...", "development_recommendations": "..." }
+    REQUIRED JSON STRUCTURE:
+    {
+      "explanation": "Markdown text...",
+      "development_recommendations": {
+         "personal": "Actionable self-learning steps...",
+         "assignment": "On-the-job tasks...",
+         "training": "Formal courses or workshops..."
+      }
+    }
     `;
 
     const response = await openai.chat.completions.create({
@@ -420,5 +466,23 @@ async function generateNarrative(
         temperature: temp
     });
 
-    return JSON.parse(response.choices[0].message.content || "{}");
+    const rawContent = response.choices[0].message.content || "{}";
+
+    let parsed;
+    try {
+      parsed = JSON.parse(rawContent);
+      const valid = NarrativeSchema.safeParse(parsed);
+      if (valid.success) return valid.data;
+      console.warn("Narrative schema mismatch, attempting fallback...");
+    } catch (e) {}
+
+    // Fallback if schema fails (e.g. AI returned flat string)
+    return {
+      explanation: parsed?.explanation || "Analysis generated.",
+      development_recommendations: {
+        personal: parsed?.development_recommendations?.personal || "Review competency guide.",
+        assignment: parsed?.development_recommendations?.assignment || "Seek mentoring.",
+        training: parsed?.development_recommendations?.training || "Attend relevant workshops."
+      }
+    };
 }
