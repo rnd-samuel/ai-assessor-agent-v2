@@ -324,6 +324,59 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       [reportId]
     );
 
+    const analysisIds = analysisResult.rows.map(r => r.id);
+    let kbMap: Record<string, any[]> = {};
+
+    if (analysisIds.length > 0) {
+      const kbRes = await query(
+        `SELECT * FROM analysis_key_behaviors
+         WHERE analysis_id = ANY($1::uuid[])
+         ORDER BY level, kb_text`,
+        [analysisIds]
+      );
+
+      const kbIds = kbRes.rows.map(k => k.id);
+      let evidenceMap: Record<string, any[]> = {};
+
+      if (kbIds.length > 0) {
+        const linkRes = await query(
+          `SELECT l.kb_analysis_id, e.quote, e.source
+           FROM analysis_evidence_links l
+           JOIN evidence e ON l.evidence_id = e.id
+           WHERE l.kb_analysis_id = ANY($1::uuid[])`,
+          [kbIds]
+        );
+
+        linkRes.rows.forEach(link => {
+          if (!evidenceMap[link.kb_analysis_id]) evidenceMap[link.kb_analysis_id] = [];
+          evidenceMap[link.kb_analysis_id].push({ quote: link.quote, source: link.source });
+        });
+      }
+
+      kbRes.rows.forEach(kb => {
+        if (!kbMap[kb.analysis_id]) kbMap[kb.analysis_id] = [];
+        kb.evidence = evidenceMap[kb.id] || [];
+        kbMap[kb.analysis_id].push(kb);
+      });
+    }
+
+    const fullAnalysis = analysisResult.rows.map(row => ({
+      id: row.id,
+      reportId: row.report_id,
+      competencyName: row.competency,
+      levelAchieved: row.level_achieved,
+      explanation: row.explanation,
+      developmentRecommendations: row.development_recommendations,
+      keyBehaviors: (kbMap[row.id] || []).map((k: any) => ({
+        id: k.id,
+        level: k.level,
+        kbText: k.kb_text,
+        status: k.status,
+        reasoning: k.reasoning,
+        evidence: k.evidence || []
+      }))
+    }));
+
     const summaryResult = await query(
       `SELECT * FROM executive_summary WHERE report_id = $1`,
       [reportId]
@@ -346,7 +399,7 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       creatorId: report.creator_id,
       evidence: evidenceResult.rows,
       rawFiles: rawFiles, // Now contains the reconstructed text!
-      competencyAnalysis: analysisResult.rows,
+      competencyAnalysis: fullAnalysis,
       executiveSummary: summaryResult.rows[0] || null,
       dictionary
     });

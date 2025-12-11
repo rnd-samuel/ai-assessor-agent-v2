@@ -1,7 +1,8 @@
 // frontend/src/components/report/CompetencyAnalysisList.tsx
 import { useState } from 'react';
-import CompetencyAnalysisCard, { type CompetencyAnalysisData } from './CompetencyAnalysisCard';
-import LoadingButton from '.././LoadingButton';
+import CompetencyAnalysisCard from './CompetencyAnalysisCard'; // Types handled inside Card now
+import { type CompetencyAnalysis } from '../../types/assessment'; // Import from shared types
+import LoadingButton from '../LoadingButton';
 
 interface CompetencyAnalysisListProps {
   reportId: string;
@@ -10,8 +11,8 @@ interface CompetencyAnalysisListProps {
   onReset: () => void;
   onHighlightEvidence: (quote: string, source: string) => void;
   onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
-  data: CompetencyAnalysisData[];
-  onChange: (newData: CompetencyAnalysisData[]) => void;
+  data: CompetencyAnalysis[];
+  onChange: (newData: CompetencyAnalysis[]) => void;
   isLastPhase: boolean;
   reportStatus: 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 }
@@ -40,7 +41,7 @@ export default function CompetencyAnalysisList({
     setIsGenerating(false);
   };
 
-  const handleCardChange = (updatedItem: CompetencyAnalysisData) => {
+  const handleCardChange = (updatedItem: CompetencyAnalysis) => {
     const newData = data.map((item) =>
         item.id === updatedItem.id ? updatedItem : item
     );

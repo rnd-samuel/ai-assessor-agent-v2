@@ -13,7 +13,7 @@ import EvidenceList from '../components/report/EvidenceList';
 import { type EvidenceCardData } from '../components/report/EvidenceCard';
 import CompetencyAnalysisList from '../components/report/CompetencyAnalysisList'; // Child 1
 import ExecutiveSummary from '../components/report/ExecutiveSummary'; // Child 2
-import { type CompetencyAnalysisData } from '../components/report/CompetencyAnalysisCard'; // Import Type
+import { type CompetencyAnalysis } from '../types/assessment';
 import UnsavedChangesModal from '../components/UnsavedChangesModal';
 import ThinkingPanel from '../components/report/ThinkingPanel';
 
@@ -36,7 +36,7 @@ interface ReportData {
   }[];
   dictionary: any;
   // These come from the API now, but we store them in separate state
-  competencyAnalysis?: CompetencyAnalysisData[]; 
+  competencyAnalysis?: CompetencyAnalysis[]; 
   executiveSummary?: any;
 }
 
@@ -427,7 +427,12 @@ export default function ReportPage() {
 
   useEffect(() => {
     const socket = getSocket();
-    if (!socket || !reportId) return;
+    if (!socket || !reportId) {
+      console.warn("Socket or ReportID missing", { socket, reportId });
+      return;
+    }
+    
+    console.log(`[Frontend] Listening for events on report ${reportId}`);
 
     // 1. Auto-Refresh File Text (Point #1)
     const onFileProcessed = (data: { fileId: string }) => {

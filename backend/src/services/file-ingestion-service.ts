@@ -1,7 +1,7 @@
 // backend/src/services/file-ingestion-service.ts
 import { pool } from './db';
 import { downloadBufferFromGCS } from './storage';
-import { OpenAIEmbedding } from '@llamaindex/openai'; 
+import { OpenAIEmbedding } from '@llamaindex/openai';
 import { Settings, Document } from 'llamaindex';
 import { publishEvent } from './redis-publisher';
 const officeParser = require('officeparser');

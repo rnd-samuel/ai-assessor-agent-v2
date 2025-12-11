@@ -412,3 +412,30 @@ ALTER TABLE global_simulation_methods DROP COLUMN IF EXISTS context_guide;
 ALTER TABLE reports ADD COLUMN active_job_id VARCHAR(255);
 
 ALTER TABLE reports ADD COLUMN IF NOT EXISTS active_job_id VARCHAR(255);
+
+-- 1. Create the atomic Key Behavior table
+CREATE TABLE IF NOT EXISTS analysis_key_behaviors (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  analysis_id UUID REFERENCES competency_analysis(id) ON DELETE CASCADE,
+  
+  level INT NOT NULL,
+  kb_text TEXT NOT NULL,
+  
+  -- The new classification for context-aware scoring
+  status VARCHAR(50) CHECK (status IN ('FULFILLED', 'NOT_OBSERVED', 'CONTRA_INDICATOR')),
+  
+  reasoning TEXT, -- AI's specific reasoning for this single KB
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. Create the Many-to-Many link table for Evidence
+-- This solves the "Which quote triggered this decision?" problem
+CREATE TABLE IF NOT EXISTS analysis_evidence_links (
+  kb_analysis_id UUID REFERENCES analysis_key_behaviors(id) ON DELETE CASCADE,
+  evidence_id UUID REFERENCES evidence(id) ON DELETE CASCADE,
+  PRIMARY KEY (kb_analysis_id, evidence_id)
+);
+
+-- 3. (Optional) Cleanup the old column
+-- We can drop it now to force our code to break (fail fast), ensuring we don't accidentally use the old logic.
+ALTER TABLE competency_analysis DROP COLUMN IF EXISTS key_behaviors_status;
