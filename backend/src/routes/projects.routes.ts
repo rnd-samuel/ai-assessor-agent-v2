@@ -74,9 +74,30 @@ router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), a
     const projectId = projectResult.rows[0].id;
 
     await query(
-      `INSERT INTO project_prompts (project_id, general_context, persona_prompt, evidence_prompt, analysis_prompt, summary_prompt)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [projectId, prompts.general_context, prompts.persona_prompt, prompts.evidence_prompt, prompts.analysis_prompt, prompts.summary_prompt]
+      `INSERT INTO project_prompts (
+       project_id, 
+       general_context, 
+       persona_prompt, 
+       evidence_prompt, 
+       kb_fulfillment_prompt,
+       competency_level_prompt,
+       development_prompt,
+       summary_prompt
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        projectId, 
+        prompts.general_context, 
+        prompts.persona_prompt, 
+        // Phase 1 Prompt
+        prompts.evidence_prompt, 
+        // Phase 2 Prompt
+        prompts.kb_fulfillment_prompt,
+        prompts.competency_level_prompt,
+        prompts.development_prompt,
+        // Phase 3 Prompt
+        prompts.summary_prompt
+      ]
     );
 
     const allUserIds = [...new Set([...userIds, creatorId])];
@@ -125,11 +146,10 @@ router.post('/', authenticateToken, authorizeRole('Admin', 'Project Manager'), a
 router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const userId = req.user?.userId;
   const userRole = req.user?.role;
-  const { search } = req.query; // <-- 1. GET THE SEARCH QUERY
+  const { search } = req.query; 
 
   try {
     let projectsResult;
-    // 2. Base query and parameters
     let sqlQuery = '';
     const params: any[] = [];
 
@@ -151,9 +171,7 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
       params.push(userId);
     }
 
-    // 3. Dynamically add the SEARCH filter
     if (search && typeof search === 'string' && search.trim() !== '') {
-      // Both base queries already have a WHERE clause, so we can always safely add AND
       sqlQuery += ' AND'; 
       sqlQuery += ` p.name ILIKE $${params.length + 1}`;
       params.push(`%${search.trim()}%`);
@@ -161,10 +179,8 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
 
     sqlQuery += ' GROUP BY p.id, p.name, p.created_at, p.creator_id ORDER BY p.created_at DESC';
 
-    // 4. Execute the final query
     projectsResult = await query(sqlQuery, params);
 
-    // 5. Format the data (this logic is now more complex, so we update it)
     const projects = projectsResult.rows.map(p => {
       const reportCount = parseInt(p.report_count, 10) || 0;
       const isCreator = p.creator_id === userId;
@@ -175,8 +191,8 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
         name: p.name,
         reports: reportCount,
         canArchive: (
-          (userRole === 'Admin' || isCreator) && // User is Admin OR project creator
-          reportCount === 0 // AND project has 0 reports
+          (userRole === 'Admin' || isCreator) && 
+          reportCount === 0 
         )
       };
     });
@@ -198,7 +214,6 @@ router.put('/:id', authenticateToken, async (req: AuthenticatedRequest, res) => 
   const { name, userIds } = req.body;
   const userId = req.user?.userId;
 
-  // Validation: Only creator can update
   const proj = await query('SELECT creator_id FROM projects WHERE id = $1', [id]);
   if (proj.rows.length === 0) return res.status(404).send({ message: "Project not found" });
   if (proj.rows[0].creator_id !== userId) return res.status(403).send({ message: "Only the creator can edit this project." });
@@ -206,17 +221,11 @@ router.put('/:id', authenticateToken, async (req: AuthenticatedRequest, res) => 
   try {
     await query('BEGIN');
     
-    // 1. Update Name
     if (name) {
         await query('UPDATE projects SET name = $1 WHERE id = $2', [name, id]);
     }
 
-    // 2. Update Users (Full Replace Strategy for simplicity)
     if (userIds && Array.isArray(userIds)) {
-        // Remove old users (except creator) - Wait, creator isn't in project_users table in our schema?
-        // Actually, in `POST /`, we added creator to project_users.
-        // Let's just wipe and recreate, ensuring creator is always there.
-        
         await query('DELETE FROM project_users WHERE project_id = $1', [id]);
         
         const allUsers = [...new Set([...userIds, userId])];
@@ -248,8 +257,6 @@ router.get('/:id/form-data', authenticateToken, async (req, res) => {
   }
 
   try {
-    // 1. Get the Competency Dictionary
-    //We join projects and competency_dictionaries to get the dictionary 'content'
     const dictQuery = await query(
       `SELECT cd.content
        FROM competency_dictionaries cd
@@ -269,7 +276,6 @@ router.get('/:id/form-data', authenticateToken, async (req, res) => {
       }
     }
 
-    // 2. Get Global Simulation Methods linked to this project
     const globalMethodsQuery = await query(
       `SELECT gsm.id, gsm.name
        FROM global_simulation_methods gsm
@@ -278,7 +284,6 @@ router.get('/:id/form-data', authenticateToken, async (req, res) => {
       [projectId]
     );
 
-    // 3. Get Project-Specific Simulation Methods
     const projectMethodsQuery = await query(
       `SELECT id, name
        FROM project_simulation_methods
@@ -291,7 +296,6 @@ router.get('/:id/form-data', authenticateToken, async (req, res) => {
       ...projectMethodsQuery.rows
     ];
 
-    // 4. Send all data to the frontend
     res.status(200).json({
       competencies,
       simulationMethods,
@@ -307,24 +311,19 @@ router.get('/:id/form-data', authenticateToken, async (req, res) => {
 router.post('/:id/upload', authenticateToken, authorizeRole('Admin', 'Project Manager'), upload.single('file'),
   async (req: AuthenticatedRequest, res) => {
     const { id: projectId } = req.params;
-    const { fileType } = req.body; // 'template', 'knowledgeBase'
+    const { fileType } = req.body; 
     const file = req.file;
     const userId = req.user?.userId;
 
     if (!file || !fileType) return res.status(400).send({ message: 'File or fileType missing.' });
 
-    // Validation: Ensure fileType is valid
     if (!['template', 'knowledgeBase'].includes(fileType)) {
         return res.status(400).send({ message: "Invalid file type." });
     }
 
     try {
-      // 1. Calculate Hash
       const fileHash = calculateHash(file.buffer);
 
-      // 2. Check for Duplicates in this Project
-      // We assume duplicate means: Same Project AND Same Content Hash
-      // This ensures "Same file names (or content) uploaded in DIFFERENT projects are allowed"
       const duplicateCheck = await query(
         "SELECT id FROM project_files WHERE project_id = $1 AND file_hash = $2",
         [projectId, fileHash]
@@ -334,11 +333,9 @@ router.post('/:id/upload', authenticateToken, authorizeRole('Admin', 'Project Ma
         return res.status(409).send({ message: `File '${file.originalname}' is a duplicate in this project.` });
       }
 
-      // 3. Upload to GCS
       const folder = `projects/${projectId}/${fileType}`;
       const gcsPath = await uploadToGCS(file.buffer, file.originalname, folder);
 
-      // 4. Save to DB
       const dbResult = await query(
         `INSERT INTO project_files (project_id, file_name, gcs_path, file_type, file_hash)
          VALUES ($1, $2, $3, $4, $5)
@@ -348,8 +345,6 @@ router.post('/:id/upload', authenticateToken, authorizeRole('Admin', 'Project Ma
 
       const newFileId = dbResult.rows[0].id;
 
-      // 5. Trigger Background Processing (Chunking & Embedding)
-      // We only need to embed Knowledge Base files, not Templates
       if (fileType === 'knowledgeBase') {
         await fileIngestionQueue.add('process-project-file', {
           fileId: newFileId,
@@ -357,10 +352,8 @@ router.post('/:id/upload', authenticateToken, authorizeRole('Admin', 'Project Ma
           userId: userId,
           projectId: projectId
         });
-        console.log(`[Upload] Queued file ${newFileId} for embedding.`);
       }
 
-      // 6. Handle Template Analysis (Synchronous is fine for small docx headers)
       let placeholders: string[] = [];
 
       if (fileType === 'template') {
@@ -391,7 +384,7 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
   const { id: projectId } = req.params;
   const userId = req.user?.userId;
   const userRole = req.user?.role;
-  const { search } = req.query; // <-- GET THE SEARCH QUERY
+  const { search } = req.query;
 
   try {
     let reportsResult;
@@ -399,7 +392,6 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
     const params: any[] = [];
 
     if (userRole === 'Admin') {
-      // Admin sees ALL reports
       sqlQuery = `
          SELECT r.id, r.created_at, r.title, u.name as user_name, (r.creator_id = $1) as can_archive
          FROM reports r
@@ -408,7 +400,6 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
       `;
       params.push(userId, projectId);
     } else if (userRole === 'Project Manager') {
-      // Check if this PM is the CREATOR of the project
       const projectCheck = await query('SELECT creator_id FROM projects WHERE id = $1', [projectId]);
       const isProjectCreator = projectCheck.rows.length > 0 && projectCheck.rows[0].creator_id === userId;
 
@@ -421,7 +412,6 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
         `;
         params.push(projectId, userId);
       } else {
-      // PM is NOT Creator (just invivted): See ONLY OWN reports
         sqlQuery = `
            SELECT r.id, r.created_at, r.title, u.name as user_name, true as can_archive
            FROM reports r
@@ -431,7 +421,6 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
         params.push(projectId, userId);
       }
     } else {
-      // Normal User: See ONLY OWN reports
       sqlQuery = `
          SELECT r.id, r.created_at, r.title, u.name as user_name, true as can_archive
          FROM reports r
@@ -441,19 +430,15 @@ router.get('/:id/reports', authenticateToken, async (req: AuthenticatedRequest, 
       params.push(projectId, userId);
     }
 
-    // --- THIS IS THE CRITICAL LOGIC ---
-    // Dynamically add the SEARCH filter
     if (search && typeof search === 'string' && search.trim() !== '') {
-      sqlQuery += ` AND r.title ILIKE $${params.length + 1}`; // ILIKE is case-insensitive
-      params.push(`%${search.trim()}%`); // Add wildcards and trim whitespace
+      sqlQuery += ` AND r.title ILIKE $${params.length + 1}`;
+      params.push(`%${search.trim()}%`);
     }
     
     sqlQuery += ' ORDER BY r.created_at DESC';
 
-    // Execute the final query
     reportsResult = await query(sqlQuery, params);
 
-    // Format the data for the frontend
     const reports = reportsResult.rows.map(r => ({
       id: r.id,
       date: new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
@@ -493,7 +478,7 @@ router.get('/:id/reports/archived', authenticateToken, async (req: Authenticated
   const { id: projectId } = req.params;
   const userId = req.user?.userId;
   const userRole = req.user?.role;
-  const { search } = req.query; // <-- GET THE SEARCH QUERY
+  const { search } = req.query;
 
   try {
     let reportsResult;
@@ -518,8 +503,6 @@ router.get('/:id/reports/archived', authenticateToken, async (req: Authenticated
       params.push(projectId, userId);
     }
 
-    // --- THIS IS THE CRITICAL LOGIC ---
-    // Dynamically add the SEARCH filter
     if (search && typeof search === 'string' && search.trim() !== '') {
       sqlQuery += ` AND r.title ILIKE $${params.length + 1}`;
       params.push(`%${search.trim()}%`);
@@ -527,7 +510,6 @@ router.get('/:id/reports/archived', authenticateToken, async (req: Authenticated
 
     sqlQuery += ' ORDER BY r.created_at DESC';
     
-    // Execute the final query
     reportsResult = await query(sqlQuery, params);
     
     const reports = reportsResult.rows.map(r => ({
@@ -555,7 +537,6 @@ router.put('/:id/archive', authenticateToken, authorizeRole('Admin', 'Project Ma
   const userRole = req.user?.role;
 
   try {
-    // 1. Get project creator and report count
     const projectResult = await query(
       `SELECT 
          creator_id, 
@@ -574,7 +555,6 @@ router.put('/:id/archive', authenticateToken, authorizeRole('Admin', 'Project Ma
     const isCreator = project.creator_id === userId;
     const isAdmin = userRole === 'Admin';
 
-    // 2. Enforce User Story PD-3.5 rules
     if (!isAdmin && !isCreator) {
       return res.status(403).send({ message: 'Forbidden: Only the project creator or an Admin can archive.' });
     }
@@ -582,7 +562,6 @@ router.put('/:id/archive', authenticateToken, authorizeRole('Admin', 'Project Ma
       return res.status(400).send({ message: 'Bad Request: Cannot archive a project that has reports.' });
     }
 
-    // 3. Update the project
     await query(
       'UPDATE projects SET is_archived = true WHERE id = $1',
       [projectId]
@@ -602,11 +581,10 @@ router.put('/:id/archive', authenticateToken, authorizeRole('Admin', 'Project Ma
 router.get('/archived', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const userId = req.user?.userId;
   const userRole = req.user?.role;
-  const { search } = req.query; // <-- 1. GET THE SEARCH QUERY
+  const { search } = req.query;
 
   try {
     let projectsResult;
-    // 2. Base query and parameters
     let sqlQuery = '';
     const params: any[] = [];
 
@@ -626,9 +604,7 @@ router.get('/archived', authenticateToken, async (req: AuthenticatedRequest, res
       params.push(userId);
     }
 
-    // 3. Dynamically add the SEARCH filter
     if (search && typeof search === 'string' && search.trim() !== '') {
-      // Both base queries already have a WHERE clause, so we can always safely add AND
       sqlQuery += ' AND';
       sqlQuery += ` p.name ILIKE $${params.length + 1}`;
       params.push(`%${search.trim()}%`);
@@ -636,10 +612,8 @@ router.get('/archived', authenticateToken, async (req: AuthenticatedRequest, res
     
     sqlQuery += ' GROUP BY p.id, p.name, p.created_at, p.creator_id ORDER BY p.created_at DESC';
 
-    // 4. Execute the final query
     projectsResult = await query(sqlQuery, params);
 
-    // 5. Format the data
     const projects = projectsResult.rows.map(p => ({
       id: p.id,
       date: new Date(p.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
@@ -665,7 +639,6 @@ router.put('/:id/unarchive', authenticateToken, authorizeRole('Admin', 'Project 
   const userRole = req.user?.role;
 
   try {
-    // 1. Get project creator
     const projectResult = await query(
       `SELECT creator_id FROM projects WHERE id = $1`,
       [projectId]
@@ -679,12 +652,10 @@ router.put('/:id/unarchive', authenticateToken, authorizeRole('Admin', 'Project 
     const isCreator = project.creator_id === userId;
     const isAdmin = userRole === 'Admin';
 
-    // 2. Enforce User Story PD-3.7 rules (only creator or Admin)
     if (!isAdmin && !isCreator) {
       return res.status(403).send({ message: 'Forbidden: Only the project creator or an Admin can unarchive.' });
     }
 
-    // 3. Update the project
     await query(
       'UPDATE projects SET is_archived = false WHERE id = $1',
       [projectId]
@@ -706,7 +677,6 @@ router.delete('/:id', authenticateToken, authorizeRole('Admin'), async (req: Aut
   const { id } = req.params;
 
   try {
-    // 1. Safety Check: Is it archived?
     const check = await query('SELECT is_archived FROM projects WHERE id = $1', [id]);
     
     if (check.rows.length === 0) {
@@ -717,7 +687,6 @@ router.delete('/:id', authenticateToken, authorizeRole('Admin'), async (req: Aut
       return res.status(400).send({ message: "Cannot delete an active project. Archive it first." });
     }
 
-    // 2. Perform Delete (Cascade will handle reports, files, etc. if schema is set up right)
     await query('DELETE FROM projects WHERE id = $1', [id]);
     
     res.send({ message: "Project permanently deleted." });
@@ -765,10 +734,9 @@ router.get('/defaults/prompts', authenticateToken, async (req, res) => {
  * Used by the NewProjectPage to populate the multi-select
  */
 router.get('/available-users', authenticateToken, async (req: AuthenticatedRequest, res) => {
-  const currentUserId = req.user?.userId; // Get the ID of the user making the request
+  const currentUserId = req.user?.userId;
 
   try {
-    // Fetch all users *except* the user creating the project
     const result = await query(
       'SELECT id, email, name FROM users WHERE id != $1 ORDER BY email',
       [currentUserId]
@@ -785,10 +753,8 @@ router.get('/available-users', authenticateToken, async (req: AuthenticatedReque
  */
 router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const { id: projectId } = req.params;
-  const userId = req.user?.userId;
 
   try {
-    // 1. Get Project, Creator, and Dictionary
     const projectResult = await query(
       `SELECT 
          p.name as project_name,
@@ -799,7 +765,13 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
          u.email as creator_email,
          u.name as creator_name,
          cd.name as dictionary_name,
-         pp.general_context
+         pp.general_context,
+         pp.persona_prompt,
+         pp.evidence_prompt,
+         pp.kb_fulfillment_prompt,
+         pp.competency_level_prompt,
+         pp.development_prompt,
+         pp.summary_prompt
        FROM projects p
        JOIN users u ON p.creator_id = u.id
        LEFT JOIN competency_dictionaries cd ON p.dictionary_id = cd.id
@@ -813,18 +785,15 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
     }
     const projectData = projectResult.rows[0];
 
-    // 2. Get Simulation Methods
     const globalMethods = await query(
       `SELECT gsm.name FROM global_simulation_methods gsm
        JOIN projects_to_global_methods pgm ON gsm.id = pgm.method_id
        WHERE pgm.project_id = $1`,
       [projectId]
     );
-    // TODO: Add project_simulation_methods query here when implemented
 
     const simMethods = globalMethods.rows.map(r => r.name);
 
-    // 3. Get file-based data (Report Template, KB Files)
     const filesResult = await query(
       `SELECT file_name, gcs_path, file_type 
        FROM project_files 
@@ -836,10 +805,6 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
     const knowledgeBaseFiles = [];
 
     for (const file of filesResult.rows) {
-        // Format: "ProjectTitle - FileName"
-        const customName = `${projectData.project_name} - ${file.file_name}`;
-
-        // Generate a signed URL for secure access (valid for 15 mins)
         const signedUrl = await getSignedUrl(file.gcs_path);
 
         const fileObj = {
@@ -854,7 +819,6 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
         }
     }
 
-    // 4. Get invited users
     const usersResult = await query(
       `SELECT u.id, u.email, u.name
        FROM project_users pu
@@ -862,9 +826,7 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
        WHERE pu.project_id = $1`,
       [projectId]
     );
-    const invitedUsers = usersResult.rows;
 
-    // 5. Assemble and send response
     res.status(200).json({
       projectName: projectData.project_name,
       projectManager: projectData.creator_name || projectData.creator_email,
@@ -876,6 +838,16 @@ router.get('/:id/context', authenticateToken, async (req: AuthenticatedRequest, 
       dictionaryId: projectData.dictionary_id,
       simulationMethods: simMethods,
       generalContext: projectData.general_context || 'No general context provided.',
+      // New: Return full prompts if needed by frontend edit
+      prompts: {
+        general_context: projectData.general_context,
+        persona_prompt: projectData.persona_prompt,
+        evidence_prompt: projectData.evidence_prompt,
+        kb_fulfillment_prompt: projectData.kb_fulfillment_prompt,
+        competency_level_prompt: projectData.competency_level_prompt,
+        development_prompt: projectData.development_prompt,
+        summary_prompt: projectData.summary_prompt
+      },
       enableAnalysis: projectData.enable_analysis,
       enableSummary: projectData.enable_summary,
       status: projectData.status
@@ -904,7 +876,7 @@ router.get('/dictionary/:id/content', authenticateToken, async (req: Authenticat
       return res.status(404).send({ message: "Dictionary not found" });
     }
 
-    res.status(200).json(result.rows[0].content); // Send the raw JSON content
+    res.status(200).json(result.rows[0].content);
 
   } catch (error) {
     console.error("Error fetching dictionary content:", error);
@@ -919,10 +891,8 @@ router.post('/analyze-template', authenticateToken, upload.single('file'), (req,
   if (!req.file) return res.status(400).send({ message: "No file provided." });
   
   try {
-    // 1. Extract all text inside { }
     const allPlaceholders = extractDocxPlaceholders(req.file.buffer);
     
-    // 2. Filter Validity
     const validPlaceholders: string[] = [];
     const invalidPlaceholders: string[] = [];
 
@@ -936,7 +906,7 @@ router.post('/analyze-template', authenticateToken, upload.single('file'), (req,
 
     res.json({ 
       placeholders: allPlaceholders, 
-      invalidPlaceholders // <-- Send this back
+      invalidPlaceholders 
     });
 
   } catch (error) {
@@ -954,25 +924,21 @@ router.post('/:id/initialize-context', authenticateToken, async (req: Authentica
   const userId = req.user?.userId;
 
   try {
-    // 1. Fetch all KB files for this project
     const kbFiles = await query(
         "SELECT gcs_path FROM project_files WHERE project_id = $1 AND file_type = 'knowledgeBase'", 
         [projectId]
     );
 
     if (kbFiles.rows.length === 0) {
-        // No files? Just mark ready (uses Global Context by default)
         await query("UPDATE projects SET status = 'READY' WHERE id = $1", [projectId]);
         return res.send({ message: "Project ready (No KB files)." });
     }
 
-    // 2. Set status to INITIALIZING
     await query("UPDATE projects SET status = 'INITIALIZING' WHERE id = $1", [projectId]);
 
-    // 3. Dispatch Job
     await aiGenerationQueue.add('init-project-context', {
         projectId,
-        files: kbFiles.rows, // Pass array of { gcs_path }
+        files: kbFiles.rows,
         userId
     });
 
