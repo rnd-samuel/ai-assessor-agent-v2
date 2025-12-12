@@ -4,7 +4,6 @@ import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { publishEvent } from './redis-publisher';
 import { Job } from 'bullmq';
-import { clearInterval } from 'timers';
 
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
@@ -12,20 +11,10 @@ const openai = new OpenAI({
   defaultHeaders: { "HTTP-Referer": "https://ai-assessor-agent.com", "X-Title": "AI Assessor Agent" }
 });
 
-// --- CONSTANTS: DEFAULT PROMPTS ---
-// (Fallback if not set in Admin Panel/Project Settings)
-const DEFAULT_JUDGMENT_INSTRUCTIONS = `
-INSTRUCTIONS:
-For EACH Key Behavior, determine the status:
-1. **FULFILLED**: The candidate explicitly demonstrated this behavior.
-2. **CONTRA_INDICATOR**: The candidate demonstrated the OPPOSITE or FAILED this behavior (e.g., was rude when they should have been polite). This is a "Negative Indicator".
-3. **NOT_OBSERVED**: There is no evidence for this. Either they didn't do it, or the simulation didn't require it.
-
-IMPORTANT: 
-- "NOT_OBSERVED" is neutral. 
-- "CONTRA_INDICATOR" is a penalty. 
-- Be strict about "CONTRA_INDICATOR". Only use it if there is clear negative evidence.
-`;
+// --- DEFAULTS (Fallback if DB is empty) ---
+const DEFAULT_KB_PROMPT = "Evaluate if the candidate demonstrated the key behaviors based on the evidence.";
+const DEFAULT_LEVEL_PROMPT = "Determine the final competency level and write a descriptive narrative.";
+const DEFAULT_DEV_PROMPT = "Provide development recommendations based on the gaps.";
 
 // --- HELPER: Cancellation Check ---
 async function checkCancellation(reportId: string, userId: string, currentJobId?: string) {
@@ -48,6 +37,7 @@ async function checkCancellation(reportId: string, userId: string, currentJobId?
   }
 }
 
+// --- HELPER: Smart Request with Polling ---
 async function smartAIRequest(
   payload: any, 
   reportId: string, 
@@ -63,7 +53,7 @@ async function smartAIRequest(
       await checkCancellation(reportId, userId, jobId);
     } catch (e) {
       console.log(`[SmartAI] Detected cancellation for job ${jobId}. Aborting OpenAI request.`);
-      controller.abort(); // <--- Kills the AI request
+      controller.abort(); 
       clearInterval(poller);
     }
   }, 1500);
@@ -85,7 +75,8 @@ async function smartAIRequest(
 
 const KB_STATUS = z.enum(['FULFILLED', 'NOT_OBSERVED', 'CONTRA_INDICATOR']);
 
-const LevelEvaluationSchema = z.object({
+// Task 1 Output
+const KeyBehaviorEvaluationSchema = z.object({
   key_behaviors: z.array(z.object({
     kb_text_fragment: z.string(),
     status: KB_STATUS,
@@ -94,46 +85,65 @@ const LevelEvaluationSchema = z.object({
   }))
 });
 
+// Task 2 Output
+const LevelAndNarrativeSchema = z.object({
+  final_level: z.number().int(),
+  explanation: z.string()
+});
+
+// Task 3 Output
+const RecommendationsSchema = z.object({
+  individual: z.string(),
+  assignment: z.string(),
+  training: z.string()
+});
+
+
 export async function runPhase2Generation(reportId: string, userId: string, job: Job) {
   const currentJobId = job.id || "unknown";
-  console.log(`[Worker] Starting Context-Aware Phase 2 for Report: ${reportId}`);
+  console.log(`[Worker] Starting Senior Assessor Phase 2 for Report: ${reportId}`);
   
   await publishEvent(userId, 'ai-stream', { 
       reportId, 
-      chunk: "🧠 Initializing Executive Assessor Logic...\n" 
+      chunk: "🧠 Initializing Senior Assessor Pipeline...\n" 
   });
 
   const client = await pool.connect();
 
   try {
-    // --- FETCH CONFIG & CONTEXT ---
+    // --- 1. FETCH CONFIG & CONTEXT ---
     const settingsRes = await query("SELECT value FROM system_settings WHERE key = 'ai_config'");
     const aiConfig = settingsRes.rows[0]?.value || {};
     
-    // Models
     const judgmentModel = aiConfig.judgmentLLM || "google/gemini-2.5-flash-lite-preview-09-2025";
     const narrativeModel = aiConfig.narrativeLLM || "google/gemini-2.5-pro";
 
-    // Prompts Configuration
-    // 1. Judgment Prompt: Global Admin Setting (fallback to default)
-    const judgmentInstructions = aiConfig.judgment_prompt || DEFAULT_JUDGMENT_INSTRUCTIONS;
-
-    // Fetch Report & Project Data
     const reportRes = await query('SELECT project_id, target_levels FROM reports WHERE id = $1', [reportId]);
     const report = reportRes.rows[0];
     const targetLevels = report.target_levels || {};
 
     const projectRes = await query(
-      `SELECT cd.content as dictionary, pp.persona_prompt, pp.analysis_prompt 
+      `SELECT 
+         cd.content as dictionary, 
+         pp.persona_prompt,
+         pp.kb_fulfillment_prompt,
+         pp.competency_level_prompt,
+         pp.development_prompt,
+         pp.general_context
        FROM projects p 
        JOIN competency_dictionaries cd ON p.dictionary_id = cd.id 
        JOIN project_prompts pp ON p.id = pp.project_id
        WHERE p.id = $1`, 
       [report.project_id]
     );
-    const { dictionary, persona_prompt, analysis_prompt } = projectRes.rows[0];
+    const { dictionary, persona_prompt, general_context } = projectRes.rows[0];
 
-    // Fetch Simulation Contexts
+    // Fallbacks for prompts (Handle legacy projects or missing fields)
+    const kbPrompt = projectRes.rows[0].kb_fulfillment_prompt || DEFAULT_KB_PROMPT;
+    const levelPrompt = projectRes.rows[0].competency_level_prompt || DEFAULT_LEVEL_PROMPT;
+    const devPrompt = projectRes.rows[0].development_prompt || DEFAULT_DEV_PROMPT;
+
+    // Fetch Simulation Contexts (Source Info)
     const simContextsRes = await query(
         `SELECT gsm.name as method_name, gsf.context_guide
          FROM projects_to_simulation_files ptsf
@@ -147,7 +157,6 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
         simContextMap[row.method_name] = row.context_guide;
     });
 
-    // Fetch Evidence
     const evidenceRes = await query(
       `SELECT id, competency, level, kb, quote, source, reasoning 
        FROM evidence WHERE report_id = $1 AND is_archived = false`,
@@ -157,7 +166,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
 
     await client.query('DELETE FROM competency_analysis WHERE report_id = $1', [reportId]);
 
-    // --- ORCHESTRATOR LOOP ---
+    // --- 2. ORCHESTRATOR LOOP ---
     for (const comp of dictionary.kompetensi) {
       try { await checkCancellation(reportId, userId, currentJobId); }
       catch (e: any) { if (e.message === "CANCELLED_BY_USER") return { status: 'CANCELLED' }; throw e; }
@@ -175,39 +184,51 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           chunk: `\n🔍 Analyzing: **${compName}** (Target: ${targetLevel})\n` 
       });
 
-      // 1. Evaluate All Levels
-      const levelResults: Record<number, any[]> = {};
-      const levelsToTest = comp.level.map((l: any) => parseInt(l.nomor));
+      // --- STEP 1: KEY BEHAVIOR CHECK ---
+      const maxDictLevel = comp.level.length; 
+      const levelsToTest: number[] = [];
 
-      for (const levelNum of levelsToTest) {
-         await publishEvent(userId, 'ai-stream', { reportId, chunk: `> Checking Level ${levelNum}...\n` });
+      if (targetLevel === 1) {
+          levelsToTest.push(1, 2);
+      } else if (targetLevel >= maxDictLevel) {
+          levelsToTest.push(maxDictLevel - 1, maxDictLevel);
+      } else {
+          levelsToTest.push(targetLevel - 1, targetLevel, targetLevel + 1);
+      }
+      
+      const validLevels = levelsToTest.filter(l => l > 0 && l <= maxDictLevel);
+      const levelResults: Record<number, any[]> = {};
+
+      for (const levelNum of validLevels) {
+         await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 1/3] Checking KB Fulfillment for Level ${levelNum}...\n` });
          
-         const judgments = await evaluateLevel(
-            comp, levelNum, relevantEvidence, judgmentModel,
-            simContextMap, judgmentInstructions,
-            reportId, userId, currentJobId
+         const judgments = await evaluateKeyBehaviors(
+            comp, levelNum, relevantEvidence, judgmentModel, 
+            persona_prompt, simContextMap, kbPrompt,
+            general_context, reportId, userId, currentJobId
          );
          levelResults[levelNum] = judgments;
       }
 
-      // 2. Score Calculation
-      const { finalLevel, logicExplanation } = calculateScoreWithImpliedCompetence(levelResults);
+      // --- STEP 2: LEVEL ASSIGNMENT & NARRATIVE ---
+      await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 2/3] Determining Final Level & Writing Narrative...\n` });
 
-      if (finalLevel >= targetLevel) {
-          await publishEvent(userId, 'ai-stream', { reportId, chunk: `✅ Target Met (Level ${finalLevel})\n` });
-      } else {
-          await publishEvent(userId, 'ai-stream', { reportId, chunk: `⚠️ Target Missed (Level ${finalLevel})\n` });
-      }
-
-      await publishEvent(userId, 'ai-stream', { reportId, chunk: `✍️ Drafting analysis narrative...\n` });
-      
-      const narrativeData = await generateNarrative(
-          compName, finalLevel, targetLevel, levelResults, 
-          narrativeModel, persona_prompt, analysis_prompt, logicExplanation,
-          reportId, userId, currentJobId // Pass ID for polling
+      const { finalLevel, explanation } = await determineLevelAndNarrative(
+          compName, targetLevel, validLevels, levelResults, comp.level,
+          narrativeModel, persona_prompt, levelPrompt, general_context,
+          reportId, userId, currentJobId
       );
 
-      // 4. Save to Database
+      // --- STEP 3: DEVELOPMENT RECOMMENDATIONS ---
+      await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 3/3] Generating Recommendations...\n` });
+
+      const recommendations = await generateRecommendations(
+          compName, finalLevel, levelResults, 
+          narrativeModel, persona_prompt, devPrompt,
+          reportId, userId, currentJobId
+      );
+
+      // --- 4. SAVE TO DATABASE ---
       await client.query('BEGIN');
 
       const analysisInsert = await client.query(
@@ -215,10 +236,10 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
          (report_id, competency, level_achieved, explanation, development_recommendations)
          VALUES ($1, $2, $3, $4, $5) RETURNING id`,
         [
-          reportId, compName, finalLevel, narrativeData.explanation,
-          `**Personal Development:**\n${narrativeData.development_recommendations.personal}\n\n` +
-          `**Assignment:**\n${narrativeData.development_recommendations.assignment}\n\n` +
-          `**Training:**\n${narrativeData.development_recommendations.training}`
+          reportId, compName, finalLevel, explanation,
+          `**Personal Development:**\n${recommendations.individual}\n\n` +
+          `**Assignment:**\n${recommendations.assignment}\n\n` +
+          `**Training:**\n${recommendations.training}`
         ]
       );
       const analysisId = analysisInsert.rows[0].id;
@@ -232,7 +253,6 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
                   [analysisId, levelNum, kb.kbText, kb.status, kb.reasoning]
               );
               
-              // Validate and Link Evidence
               if (kb.evidenceIds && kb.evidenceIds.length > 0) {
                   const validIds = kb.evidenceIds.filter((aiId: string) => 
                       allEvidence.some((realEv: any) => realEv.id === aiId)
@@ -275,9 +295,10 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
 
 // --- INTELLIGENCE FUNCTIONS ---
 
-async function evaluateLevel(
-    comp: any, level: number, allRelevantEvidence: any[], model: string,
-    simContextMap: Record<string, string>, instructions: string,
+// TASK 1: KEY BEHAVIOR CHECK
+async function evaluateKeyBehaviors(
+    comp: any, level: number, allRelevantEvidence: any[], model: string, persona: string, 
+    simContextMap: Record<string, string>, instructions: string, projectContext: string,
     reportId: string, userId: string, jobId: string
 ) {
     const lvlObj = comp.level.find((l: any) => String(l.nomor) === String(level));
@@ -287,175 +308,203 @@ async function evaluateLevel(
         `SOURCE [${e.source}] (ID:${e.id}): "${e.quote}"\n   Context: ${e.reasoning}`
     ).join('\n\n');
 
+    // FIX: Explicitly appending the JSON schema structure to the prompt
     const prompt = `
-    TASK: Determine fulfillment of Level ${level} for "${comp.name || comp.namaKompetensi}".
-    
-    DEFINITION: ${lvlObj.penjelasan}
-    
-    KEY BEHAVIORS:
-    ${lvlObj.keyBehavior.map((kb: string, i: number) => `${i+1}. ${kb}`).join('\n')}
-    
-    EVIDENCE POOL:
-    ${evidenceListText || "No specific evidence found."}
-    
-    SIMULATION CONTEXTS (Use to judge source relevance):
-    ${Object.entries(simContextMap).map(([k, v]) => `[${k}]: ${v}`).join('\n\n')}
-
-    *** CRITICAL INSTRUCTION ON SOURCE RELEVANCE ***
-    - **EVIDENCE MATCHING:** Check if the candidate's actions in the EVIDENCE POOL specifically match the Key Behaviors.
-    - **STRICT SCORING:** - Only mark **FULFILLED** if there is *explicit, strong* evidence. Vague or weak evidence should be "NOT_OBSERVED".
-       - Do not give "benefit of the doubt". If they didn't do it, it is NOT_OBSERVED.
-    - **Relevance Rule:** If a Key Behavior is missing from a source (e.g., Roleplay) but that source is NOT designed to measure this specific competency (e.g., it measures Communication, not Analytics), ignore the absence. 
-    - **Single Source Sufficiency:** If evidence exists in *at least one* valid source, mark the behavior as **FULFILLED**. Do not require consistency across all sources.
-    - **Negative Evidence:** Only mark **CONTRA_INDICATOR** if the candidate actively demonstrated *bad* behavior. Simple absence is NOT a contra-indicator.
-
+    ${persona}
     ${instructions}
 
-    OUTPUT JSON:
+    === DATA FOR ANALYSIS ===
+    
+    **COMPETENCY:** ${comp.name || comp.namaKompetensi}
+    **LEVEL:** ${level}
+    **DEFINITION:** ${lvlObj.penjelasan}
+    
+    **PROJECT CONTEXT:**
+    ${projectContext}
+
+    **SIMULATION METHOD CONTEXTS:**
+    ${Object.entries(simContextMap).map(([k, v]) => `[${k}]: ${v}`).join('\n\n')}
+
+    **KEY BEHAVIORS TO EVALUATE:**
+    ${lvlObj.keyBehavior.map((kb: string, i: number) => `${i+1}. ${kb}`).join('\n')}
+    
+    **EVIDENCE POOL:**
+    ${evidenceListText || "No specific evidence found for this competency."}
+
+    *** OUTPUT REQUIREMENT ***
+    You MUST return a JSON object exactly matching this structure:
     {
       "key_behaviors": [
         {
-          "kb_text_fragment": "...",
+          "kb_text_fragment": "A short snippet of the KB text to identify it",
           "status": "FULFILLED" | "NOT_OBSERVED" | "CONTRA_INDICATOR",
-          "reasoning": "Explain why, explicitly mentioning the source used.",
-          "evidence_quote_ids": ["..."]
+          "reasoning": "Explanation of the behavior. Do NOT include Evidence IDs in this text.",
+          "evidence_quote_ids": ["ID1", "ID2"] 
         }
       ]
     }
     `;
 
-    // USE SMART REQUEST (POLLING)
     const response = await smartAIRequest(
         {
             model: model,
             messages: [{ role: "user", content: prompt }],
             response_format: { type: "json_object" },
-            temperature: 0.2
+            temperature: 0.2 
         },
         reportId, userId, jobId
     );
 
     const rawContent = response.choices[0].message.content || "{}";
-    const parsed = LevelEvaluationSchema.safeParse(JSON.parse(rawContent));
+    
+    // Log for debugging if needed
+    // console.log("AI Response Task 1:", rawContent);
 
-    if (!parsed.success) return [];
+    const parsed = KeyBehaviorEvaluationSchema.safeParse(JSON.parse(rawContent));
+
+    if (!parsed.success) {
+        console.error("Task 1 Parse Failed", parsed.error, rawContent);
+        return [];
+    }
 
     return lvlObj.keyBehavior.map((kbText: string, i: number) => {
-        const aiResult = parsed.data.key_behaviors[i] || {};
+        let aiResult: typeof parsed.data.key_behaviors[number] | undefined = parsed.data.key_behaviors[i];
+        
+        if (!aiResult) {
+            aiResult = parsed.data.key_behaviors.find(k => k.kb_text_fragment && kbText.includes(k.kb_text_fragment));
+        }
+
         return {
             kbText,
-            status: aiResult.status || 'NOT_OBSERVED',
-            reasoning: aiResult.reasoning || "No data",
-            evidenceIds: aiResult.evidence_quote_ids || []
+            status: aiResult?.status || 'NOT_OBSERVED',
+            reasoning: aiResult?.reasoning || "No data provided by AI.",
+            evidenceIds: aiResult?.evidence_quote_ids || []
         };
     });
 }
 
-function calculateScoreWithImpliedCompetence(levelResults: Record<number, any[]>) {
-    let finalLevel = 0;
-    const explanationParts: string[] = [];
-    const maxLevel = 5;
-
-    // 1. Contra-Indicator Check (Hard Ceiling)
-    let ceiling = maxLevel + 1;
-    for (let l = 1; l <= maxLevel; l++) {
-        if (!levelResults[l]) continue;
-        const contras = levelResults[l].filter((k: any) => k.status === 'CONTRA_INDICATOR');
-        if (contras.length > 0) {
-            explanationParts.push(`Observed negative behavior at Level ${l}. Score capped.`);
-            ceiling = l; 
-            break;
-        }
-    }
-
-    // 2. Find Highest "Real" Pass (Strict Threshold 0.75)
-    let highestFulfilled = 0;
-    for (let l = 1; l < ceiling; l++) {
-        if (!levelResults[l]) break;
-        const fulfilled = levelResults[l].filter((k: any) => k.status === 'FULFILLED').length;
-        if (fulfilled / levelResults[l].length >= 0.75) highestFulfilled = l;
-        else break; 
-    }
-
-    // 3. Implied Pass Logic
-    for (let l = 1; l < ceiling; l++) {
-        const kbs = levelResults[l] || [];
-        const fulfilled = kbs.filter((k: any) => k.status === 'FULFILLED');
-        const notObserved = kbs.filter((k: any) => k.status === 'NOT_OBSERVED');
-        
-        const isRealPass = fulfilled.length >= Math.ceil(kbs.length * 0.75);
-        const isImpliedPass = (l < highestFulfilled) && (fulfilled.length + notObserved.length === kbs.length);
-
-        if (isRealPass) finalLevel = l;
-        else if (isImpliedPass) {
-            finalLevel = l;
-            explanationParts.push(`Level ${l} deemed competent via implication (demonstrated Level ${highestFulfilled} capability).`);
-        } else {
-            break; 
-        }
-    }
-
-    return { finalLevel, logicExplanation: explanationParts.join(' ') };
-}
-
-async function generateNarrative(
-    compName: string, finalLevel: number, targetLevel: number, levelResults: any,
-    model: string, persona: string, customPrompt: string, logicExplanation: string,
+// TASK 2: LEVEL ASSIGNMENT & NARRATIVE
+async function determineLevelAndNarrative(
+    compName: string, targetLevel: number, levelsChecked: number[], levelResults: any,
+    allLevelDefinitions: any[],
+    model: string, persona: string, instructions: string, projectContext: string,
     reportId: string, userId: string, jobId: string
 ) {
-    let evidenceSummary = "";
-    for (const [lvl, kbs] of Object.entries(levelResults)) {
-        // @ts-ignore
-        const significant = kbs.filter(k => k.status !== 'NOT_OBSERVED');
-        if (significant.length > 0) {
-            evidenceSummary += `\nLevel ${lvl} Findings:\n`;
-            // @ts-ignore
-            significant.forEach(k => evidenceSummary += `- [${k.status}] ${k.kbText}: ${k.reasoning}\n`);
-        }
+    let resultsSummary = "";
+    for (const lvl of levelsChecked) {
+        resultsSummary += `\n--- LEVEL ${lvl} RESULTS ---\n`;
+        const kbs = levelResults[lvl] || [];
+        kbs.forEach((kb: any) => {
+            resultsSummary += `- [${kb.status}] ${kb.kbText}: ${kb.reasoning}\n`;
+        });
     }
 
+    const levelDefs = allLevelDefinitions.map((l: any) => `Level ${l.nomor}: ${l.penjelasan}`).join('\n');
+
+    // FIX: Enforcing JSON Output
     const prompt = `
     ${persona}
-    ${customPrompt}
+    ${instructions}
 
-    TASK: Write the final assessment narrative for "${compName}".
+    === DATA FOR DECISION ===
+    **COMPETENCY:** ${compName}
+    **TARGET LEVEL:** ${targetLevel}
     
-    CONTEXT:
-    - Final Score: ${finalLevel} (Target: ${targetLevel})
-    - Logic: ${logicExplanation}
-    
-    KEY OBSERVATIONS:
-    ${evidenceSummary}
+    **PROJECT CONTEXT:**
+    ${projectContext}
 
-    *** STYLE & TONE GUIDELINES (STRICT) ***
-    1. **NO JARGON:** Do not use words like "Level 1", "Target Level", "Key Behavior", "Contra-Indicator", or "Dictionary".
-    2. **DESCRIPTIVE & GENERALIZED:** - Describe the *pattern* of behavior, not just the specific event.
-       - **CRITICAL:** Do NOT use specific names from the simulation (e.g., "Fani", "Pak Budi", "PT Maju").
-       - Instead of "He told Fani to fix the report", write "He provides direct feedback to subordinates regarding work quality."
-       - Instead of "In the meeting with the union", write "In negotiation situations..."
-    3. **DIRECT:** Be professional and concise. Use "The assessee", "He/She", or the candidate's name.
-    4. **RECOMMENDATIONS:** Must be actionable, specific to the gaps identified, and follow the 3 categories below.
+    **DICTIONARY LEVELS:**
+    ${levelDefs}
 
-    OUTPUT JSON:
+    **KB EVALUATION RESULTS (FROM TASK 1):**
+    ${resultsSummary}
+
+    *** OUTPUT REQUIREMENT ***
+    Return ONLY a JSON object:
     {
-      "explanation": "A descriptive paragraph explaining their performance.",
-      "development_recommendations": {
-         "personal": "Specific self-learning actions.",
-         "assignment": "On-the-job tasks to practice.",
-         "training": "Formal training topics."
-      }
+      "final_level": <number>,
+      "explanation": "<string>"
     }
     `;
+
     const response = await smartAIRequest(
         {
             model: model,
             messages: [{ role: "user", content: prompt }],
             response_format: { type: "json_object" },
-            temperature: 0.7
+            temperature: 0.5
         },
         reportId, userId, jobId
     );
 
     const raw = response.choices[0].message.content || "{}";
-    return JSON.parse(raw); 
+    const parsed = LevelAndNarrativeSchema.safeParse(JSON.parse(raw));
+    
+    if (!parsed.success) {
+        console.error("Task 2 Parse Failed", parsed.error, raw);
+        return { finalLevel: 0, explanation: "Error generating explanation." };
+    }
+    return { finalLevel: parsed.data.final_level, explanation: parsed.data.explanation };
+}
+
+// TASK 3: DEVELOPMENT RECOMMENDATIONS
+async function generateRecommendations(
+    compName: string, finalLevel: number, levelResults: any,
+    model: string, persona: string, instructions: string,
+    reportId: string, userId: string, jobId: string
+) {
+    let gapsText = "";
+    for (const [lvl, kbs] of Object.entries(levelResults)) {
+        // @ts-ignore
+        const gaps = kbs.filter(k => k.status !== 'FULFILLED');
+        if (gaps.length > 0) {
+            gapsText += `\nLevel ${lvl} Gaps:\n`;
+            // @ts-ignore
+            gaps.forEach(k => gapsText += `- ${k.kbText} (${k.status})\n`);
+        }
+    }
+
+    if (!gapsText) {
+        gapsText = "No specific gaps found (Target exceeded). Focus on mastery.";
+    }
+
+    // FIX: Enforcing JSON Output
+    const prompt = `
+    ${persona}
+    ${instructions}
+
+    === DATA FOR RECOMMENDATIONS ===
+    **COMPETENCY:** ${compName}
+    **CURRENT ASSIGNED LEVEL:** ${finalLevel}
+    
+    **IDENTIFIED GAPS:**
+    ${gapsText}
+
+    *** OUTPUT REQUIREMENT ***
+    Return ONLY a JSON object:
+    {
+      "individual": "<markdown string>",
+      "assignment": "<markdown string>",
+      "training": "<markdown string>"
+    }
+    `;
+
+    const response = await smartAIRequest(
+        {
+            model: model,
+            messages: [{ role: "user", content: prompt }],
+            response_format: { type: "json_object" },
+            temperature: 0.7 
+        },
+        reportId, userId, jobId
+    );
+
+    const raw = response.choices[0].message.content || "{}";
+    const parsed = RecommendationsSchema.safeParse(JSON.parse(raw));
+
+    if (!parsed.success) {
+        console.error("Task 3 Parse Failed", parsed.error, raw);
+        return { individual: "No data", assignment: "No data", training: "No data" };
+    }
+    return parsed.data;
 }

@@ -77,7 +77,12 @@ export default function NewProjectPage() {
     general_context: '',
     persona_prompt: '[Default persona prompt...]',
     evidence_prompt: '[Default evidence prompt...]',
-    analysis_prompt: '[Default analysis prompt...]',
+    
+    // New Phase 2 Prompts
+    kb_fulfillment_prompt: '',
+    competency_level_prompt: '',
+    development_prompt: '',
+    
     summary_prompt: '[Default summary prompt...]'
   });
 
@@ -149,18 +154,22 @@ export default function NewProjectPage() {
         const response = await apiService.get('/projects/defaults/prompts');
         const defaults = response.data;
         
-        // Only overwrite if they exist
         if (defaults && Object.keys(defaults).length > 0) {
             setPrompts(prev => ({
                 ...prev,
                 persona_prompt: defaults.persona || prev.persona_prompt,
                 evidence_prompt: defaults.evidence || prev.evidence_prompt,
-                analysis_prompt: defaults.analysis || prev.analysis_prompt,
+                
+                // Map the JSON keys (kb_fulfillment) to State keys (kb_fulfillment_prompt)
+                kb_fulfillment_prompt: defaults.kb_fulfillment || prev.kb_fulfillment_prompt,
+                competency_level_prompt: defaults.competency_level || prev.competency_level_prompt,
+                development_prompt: defaults.development || prev.development_prompt,
+                
                 summary_prompt: defaults.summary || prev.summary_prompt
             }));
         }
-      } catch (error) {
-        console.error("Failed to load default prompts");
+      } catch (error) { 
+        console.error("Failed to load default prompts"); 
       }
     };
     fetchDefaults();
@@ -660,91 +669,102 @@ return (
 
           {/* Section 5: Prompt Settings (P12) */}
           {activeSection === 'prompts' && (
-            <section id="section-prompts" className="max-w-3xl mx-auto space-y-6">
+            <section className="max-w-3xl mx-auto space-y-6">
               <h2 className="text-xl font-semibold text-text-primary">5. Prompt Settings</h2>
-              <p className="text-sm">Adjust the default prompts for the AI. These will be used for all reports generated in this project.</p>
               
               <div className="space-y-6">
-                {/* General Context (P12) */}
                 <div>
                   <label className="text-sm font-medium mb-1 block">General Context</label>
                   <textarea 
                     rows={3} 
                     placeholder="Enter general context for this project..." 
-                    className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
-                    value={prompts.general_context}
-                    onChange={(e) => setPrompts(p => ({...p, general_context: e.target.value}))}
-                  />
+                    className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none" 
+                    value={prompts.general_context} 
+                    onChange={(e) => setPrompts(p => ({...p, general_context: e.target.value}))} 
+                    />
                 </div>
-                {/* Persona (P12) */}
                 <div>
                   <label className="text-sm font-medium mb-1 block">Persona (System Prompt)</label>
-                  <textarea 
-                    rows={5} 
-                    className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
-                    value={prompts.persona_prompt}
-                    onChange={(e) => setPrompts(p => ({...p, persona_prompt: e.target.value}))}
+                  <textarea
+                   rows={5} 
+                   className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none" 
+                   value={prompts.persona_prompt} 
+                   onChange={(e) => setPrompts(p => ({...p, persona_prompt: e.target.value}))} 
                   />
                 </div>
-                {/* Evidence Collection (P12) */}
                 <div>
-                  <label className="text-sm font-medium mb-1 block">Evidence Collection (KB_evidence_prompt)</label>
-                  <textarea 
-                    rows={5} 
-                    className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
-                    value={prompts.evidence_prompt}
-                    onChange={(e) => setPrompts(p => ({...p, evidence_prompt: e.target.value}))}
+                  <label className="text-sm font-medium mb-1 block">Evidence Collection (Phase 1)</label>
+                  <textarea
+                   rows={5} 
+                   className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none" 
+                   value={prompts.evidence_prompt} 
+                   onChange={(e) => setPrompts(p => ({...p, evidence_prompt: e.target.value}))} 
                   />
                 </div>
 
-                {/* Competency Analysis with Toggle (P12) */}
-                <div className="pt-2">
-                  <div className="border-t border-border pt-6">
-                    <div className="flex justify-between items-center mb-1">
-                      <label className="text-sm font-medium">Competency Analysis (competency_analysis_prompt)</label>
-                      <button 
-                        type="button"
-                        onClick={handleCompetencyToggle}
-                        className={`relative inline-flex items-center h-6 rounded-full w-11 cursor-pointer transition-colors ${competencyAnalysis ? 'bg-primary' : 'bg-gray-200'}`}
-                      >
-                        <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${competencyAnalysis ? 'translate-x-6' : 'translate-x-1'}`} />
-                      </button>
+                {/* PHASE 2 PROMPTS */}
+                <div className="p-4 bg-bg-medium/30 rounded-lg border border-border space-y-4">
+                    <div className="flex justify-between items-center">
+                        <label className="text-sm font-bold text-text-primary uppercase tracking-wide">Phase 2: Competency Analysis</label>
+                        <button
+                         type="button" 
+                         onClick={handleCompetencyToggle}
+                         className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors ${competencyAnalysis ? 'bg-primary' : 'bg-gray-200'}`}
+                        >
+                          <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${competencyAnalysis ? 'translate-x-6' : 'translate-x-1'}`} />
+                        </button>
                     </div>
-                    <p className="text-xs text-text-muted mb-2">Enable this to generate the 'Competency Analysis' section in reports.</p>
-                    <textarea 
-                      rows={5} 
-                      className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
-                      value={prompts.analysis_prompt}
-                      onChange={(e) => setPrompts(p => ({...p, analysis_prompt: e.target.value}))}
-                    />
-                  </div>
+                    {competencyAnalysis && (
+                        <>
+                            <div>
+                                <label className="text-sm font-medium mb-1 block">Task 1: KB Fulfillment Check</label>
+                                <textarea
+                                  rows={6} 
+                                  className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
+                                  value={prompts.kb_fulfillment_prompt} 
+                                  onChange={(e) => setPrompts(p => ({...p, kb_fulfillment_prompt: e.target.value}))} 
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium mb-1 block">Task 2: Level Assignment & Narrative</label>
+                                <textarea
+                                  rows={6} 
+                                  className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
+                                  value={prompts.competency_level_prompt} onChange={(e) => setPrompts(p => ({...p, competency_level_prompt: e.target.value}))} 
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium mb-1 block">Task 3: Development Recommendations</label>
+                                <textarea
+                                  rows={6} 
+                                  className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
+                                  value={prompts.development_prompt} 
+                                  onChange={(e) => setPrompts(p => ({...p, development_prompt: e.target.value}))} 
+                                />
+                            </div>
+                        </>
+                    )}
                 </div>
 
-                {/* Executive Summary with Toggle (P12) */}
-                <div className="pt-2">
-                  <div className="border-t border-border pt-6">
+                <div className="border-t border-border pt-6">
                     <div className="flex justify-between items-center mb-1">
-                      <label className={`text-sm font-medium ${!competencyAnalysis ? 'text-text-muted' : ''}`}>Executive Summary (executive_summary_prompt)</label>
-                      <button 
-                        type="button"
+                      <label className={`text-sm font-medium ${!competencyAnalysis ? 'text-text-muted' : ''}`}>Executive Summary (Phase 3)</label>
+                      <button
+                        type="button" 
                         onClick={handleSummaryToggle}
-                        className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors ${competencyAnalysis && executiveSummary ? 'bg-primary' : 'bg-gray-200'} ${!competencyAnalysis ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                        className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors ${competencyAnalysis && executiveSummary ? 'bg-primary' : 'bg-gray-200'} ${!competencyAnalysis ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`} 
                         disabled={!competencyAnalysis}
                       >
                         <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${competencyAnalysis && executiveSummary ? 'translate-x-6' : 'translate-x-1'}`} />
                       </button>
                     </div>
-                    <p className={`text-xs text-text-muted mb-2 ${!competencyAnalysis ? 'text-warning/80' : ''}`}>
-                      Requires 'Competency Analysis' to be enabled.
-                    </p>
                     <textarea 
                       rows={5} 
-                      className={`w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm ${!competencyAnalysis ? 'opacity-50 bg-bg-medium cursor-not-allowed' : ''}`}
-                      disabled={!competencyAnalysis}
-                      value={prompts.summary_prompt}
-                      onChange={(e) => setPrompts(p => ({...p, summary_prompt: e.target.value}))}
+                      className={`w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm ${!competencyAnalysis ? 'opacity-50 bg-bg-medium' : ''}`} 
+                      disabled={!competencyAnalysis} 
+                      value={prompts.summary_prompt} 
+                      onChange={(e) => setPrompts(p => ({...p, summary_prompt: e.target.value}))} 
                     />
-                  </div>
                 </div>
               </div>
             </section>

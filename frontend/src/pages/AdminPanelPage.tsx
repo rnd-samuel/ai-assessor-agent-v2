@@ -13,7 +13,7 @@ import {
   Legend,
 } from 'chart.js';
 import flatpickr from 'flatpickr';
-import 'flatpickr/dist/flatpickr.min.css'; // Import the styles
+import 'flatpickr/dist/flatpickr.min.css'; 
 import { useBlocker } from 'react-router-dom';
 import apiService from '../services/apiService';
 import DictionaryEditor from '../components/DictionaryEditor';
@@ -47,14 +47,13 @@ type AdminTab = 'usage' | 'queue' | 'logging' | 'knowledge' | 'ai_settings' | 'u
 const supportsTemperature = (model: string) => {
   // Example logic: OpenAI 'o1' models don't support temperature. 
   // For now, we assume all do, but this function is ready for logic.
-  if (model.includes('o1-preview') || model.includes('o1-mini')) return false;
+  if (model.includes('gpt') || model.includes('o1')) return false;
   return true;
 };
 
 export default function AdminPanelPage() {
   // (A2) State for active tab
   const [activeTab, setActiveTab] = useState<AdminTab>('usage');
-
   const addToast = useToastStore((state) => state.addToast);
   
   // State for all modals
@@ -85,14 +84,6 @@ export default function AdminPanelPage() {
     is_in_use: boolean;
   }[]>([]);
   const [isUploadingDict, setIsUploadingDict] = useState(false);
-
-  const [globalKbFiles, setGlobalKbFiles] = useState<{id: string, file_name: string, created_at: string}[]>([]);
-  const [isUploadingKb, setIsUploadingKb] = useState(false);
-
-  const [viewGuideModal, setViewGuideModal] = useState(false);
-  const [globalGuideContent, setGlobalGuideContent] = useState("");
-  const [isLoadingGuide, setIsLoadingGuide] = useState(false);
-
   const [editingDictionary, setEditingDictionary] = useState<{
     id: string; 
     name: string;
@@ -101,7 +92,13 @@ export default function AdminPanelPage() {
   } | null>(null);
   const [isSavingDict, setIsSavingDict] = useState(false);
 
-  // State for Simulation Methods
+  // KB & Sim Files State
+  const [globalKbFiles, setGlobalKbFiles] = useState<{id: string, file_name: string, created_at: string}[]>([]);
+  const [isUploadingKb, setIsUploadingKb] = useState(false);
+  const [viewGuideModal, setViewGuideModal] = useState(false);
+  const [globalGuideContent, setGlobalGuideContent] = useState("");
+  const [isLoadingGuide, setIsLoadingGuide] = useState(false);
+
   const [simMethods, setSimMethods] = useState<{id: string, name: string, description: string}[]>([]);
   const [methodForm, setMethodForm] = useState({ id: '', name: '', description: '' });
   const [isEditingMethod, setIsEditingMethod] = useState(false);
@@ -111,50 +108,17 @@ export default function AdminPanelPage() {
   const [simFiles, setSimFiles] = useState<{id: string, file_name: string, method_name: string}[]>([]);
   const [isUploadingSimFile, setIsUploadingSimFile] = useState(false);
 
-  // State for Users
-  const [users, setUsers] = useState<{id: string, name: string, email: string, role: string}[]>([]);
-  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'User' });
-  const [editingUserId, setEditingUserId] = useState<string | null>(null);
-
   // We need a temporary state to hold the file while the user selects the method
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [targetMethodId, setTargetMethodId] = useState('');
 
-  const [isDirty, setIsDirty] = useState(false);
-
+  // State for Users
+  const [users, setUsers] = useState<{id: string, name: string, email: string, role: string}[]>([]);
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'User' });
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [isSavingUser, setIsSavingUser] = useState(false);
-  
-  // AI Config State
-  const [aiConfig, setAiConfig] = useState({
-    judgmentLLM: 'google/gemini-2.5-flash-lite-preview-09-2025',
-    narrativeLLM: 'google/gemini-3-pro-preview',
-    backupLLM: 'openrouter/openai/gpt-5.1',
-    judgmentTemp: 0.5,
-    backupTemp: 0.5,
-    askAiEnabled: true,
-    askAiLLM: 'openrouter/google/gemini-2.5-flash',
-  });
 
-  // Default Prompts State
-  const [defaultPrompts, setDefaultPrompts] = useState({
-    persona: '',
-    evidence: '',
-    analysis: '',
-    summary: '',
-    askAiSystem: '' // Moved here to save with other prompts
-  });
-
-  // Refs for charts and datepicker
-  const apiRequestsChartRef = useRef<HTMLCanvasElement>(null);
-  const tokenUsageChartRef = useRef<HTMLCanvasElement>(null);
-  const waitTimeChartRef = useRef<HTMLCanvasElement>(null);
-  const dateRangeRef = useRef<HTMLInputElement>(null);
-  const datePickerInstance = useRef<flatpickr.Instance | null>(null);
-
-  // Helper to manage modals
-  const openModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: true }));
-  const closeModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: false }));
-
+  const [isDirty, setIsDirty] = useState(false);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
 
@@ -178,6 +142,40 @@ export default function AdminPanelPage() {
   // Sort state for Models Table
   const [modelSortKey, setModelSortKey] = useState<keyof AiModel>('id');
   const [modelSortOrder, setModelSortOrder] = useState<'asc' | 'desc'>('asc');
+  
+  // AI Config State
+  const [aiConfig, setAiConfig] = useState({
+    judgmentLLM: 'google/gemini-2.5-flash-lite-preview-09-2025',
+    narrativeLLM: 'google/gemini-3-pro-preview',
+    backupLLM: 'openrouter/openai/gpt-5.1',
+    judgmentTemp: 0.5,
+    backupTemp: 0.5,
+    askAiEnabled: true,
+    askAiLLM: 'openrouter/google/gemini-2.5-flash',
+  });
+
+  // UPDATED: Default Prompts State
+  const [defaultPrompts, setDefaultPrompts] = useState({
+    persona: '',
+    evidence: '',
+    // Replaced 'analysis' with specific steps
+    kb_fulfillment: '',
+    competency_level: '',
+    development: '',
+    summary: '',
+    askAiSystem: ''
+  });
+
+  // Refs for charts and datepicker
+  const apiRequestsChartRef = useRef<HTMLCanvasElement>(null);
+  const tokenUsageChartRef = useRef<HTMLCanvasElement>(null);
+  const waitTimeChartRef = useRef<HTMLCanvasElement>(null);
+  const dateRangeRef = useRef<HTMLInputElement>(null);
+  const datePickerInstance = useRef<flatpickr.Instance | null>(null);
+
+  // Helper to manage modals
+  const openModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: true }));
+  const closeModal = (modal: keyof typeof modals) => setModals(prev => ({ ...prev, [modal]: false }));
 
   // (A3) Effect to initialize dummy charts
   useEffect(() => {
@@ -528,8 +526,6 @@ export default function AdminPanelPage() {
             apiService.get('/admin/settings/ai_config'),
             apiService.get('/admin/settings/default_prompts')
           ]);
-          
-          // Merge with defaults to avoid null issues
           if (configRes.data && Object.keys(configRes.data).length > 0) {
              setAiConfig(prev => ({ ...prev, ...configRes.data }));
           }
@@ -1077,7 +1073,6 @@ export default function AdminPanelPage() {
           )}
 
           {/* AI Settings Tab (A15-A21) */}
-          {/* AI Settings Tab (A15-A21) */}
           {activeTab === 'ai_settings' && (
             <div className="space-y-8">
               
@@ -1287,17 +1282,47 @@ export default function AdminPanelPage() {
                         }}
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-text-secondary mb-1">Competency Analysis Prompt</label>
-                      <textarea 
-                        rows={4} 
-                        className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
-                        value={defaultPrompts.analysis}
-                        onChange={(e) => {
-                            setDefaultPrompts({ ...defaultPrompts, analysis: e.target.value });
-                            setIsDirty(true);
-                        }}
-                      />
+                    <div className="p-4 bg-bg-medium/30 rounded-lg border border-border space-y-4">
+                      <h4 className="text-sm font-bold text-text-primary uppercase tracking-wide">Phase 2: Competency Analysis</h4>
+                      <div>
+                        <label className="block text-sm font-medium text-text-secondary mb-1">Task 1: KB Fulfillment Check</label>
+                        <p className="text-xs text-text-muted mb-2">Instructs AI to check evidence against key behaviors and determine status.</p>
+                        <textarea
+                          rows={6}
+                          className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none font-mono"
+                          value={defaultPrompts.kb_fulfillment}
+                          onChange={(e) => { 
+                            setDefaultPrompts({ ...defaultPrompts, kb_fulfillment: e.target.value }); 
+                            setIsDirty(true); 
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-text-secondary mb-1">Task 2: Level Assignment & Narrative</label>
+                        <p className="text-xs text-text-muted mb-2">Instructs AI to assign the final level and write the descriptive explanation.</p>
+                        <textarea
+                          rows={6}
+                          className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none font-mono"
+                          value={defaultPrompts.competency_level}
+                          onChange={(e) => { 
+                            setDefaultPrompts({ ...defaultPrompts, competency_level: e.target.value }); 
+                            setIsDirty(true); 
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-text-secondary mb-1">Task 3: Development Recommendations</label>
+                        <p className="text-xs text-text-muted mb-2">Instructs AI to generate specific development advice.</p>
+                        <textarea
+                          rows={6}
+                          className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none font-mono"
+                          value={defaultPrompts.development}
+                          onChange={(e) => { 
+                            setDefaultPrompts({ ...defaultPrompts, development: e.target.value }); 
+                            setIsDirty(true); 
+                          }}
+                        />
+                      </div>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-text-secondary mb-1">Executive Summary Prompt</label>
