@@ -761,44 +761,50 @@ router.put('/:id/content', authenticateToken, async (req: AuthenticatedRequest, 
   const client = await query('BEGIN');
 
   try {
-    // Update Report Title (if provided)
+    // 1. Update Title
     if (title) {
       await query('UPDATE reports SET title = $1 WHERE id = $2', [title, reportId]);
     }
 
-    // Save Analysis
+    // 2. Save Analysis
     if (competencyAnalysis && Array.isArray(competencyAnalysis)) {
       for (const item of competencyAnalysis) {
         if (item.id) {
-          const levelAchieved = item.levelAchieved || item.level_achieved;
-          const explanation = item.explanation;
-          const devRecs = item.developmentRecommendations || item.development_recommendations;
-          
-          const kbData = item.keyBehaviors || item.key_behaviors_status || [];
-          const kbJson = JSON.stringify(kbData);
-
+          // A. Update Main Analysis Record (removed key_behaviors_status)
           await query(
             `UPDATE competency_analysis 
-             SET level_achieved = $1, explanation = $2, development_recommendations = $3, key_behaviors_status = $4, updated_at = NOW()
-             WHERE id = $5 AND report_id = $6`,
+             SET level_achieved = $1, explanation = $2, development_recommendations = $3, updated_at = NOW()
+             WHERE id = $4 AND report_id = $5`,
             [
-                levelAchieved, // $1
-                explanation,   // $2
-                devRecs,       // $3
-                kbJson,        // $4
-                item.id,       // $5
-                reportId       // $6
+                item.levelAchieved, 
+                item.explanation, 
+                item.developmentRecommendations, 
+                item.id, 
+                reportId
             ]
           );
+
+          // B. Update Child Key Behaviors (if present)
+          const keyBehaviors = item.keyBehaviors || item.key_behaviors_status; // Handle both prop names
+          if (Array.isArray(keyBehaviors)) {
+             for (const kb of keyBehaviors) {
+                 if (kb.id) {
+                     await query(
+                         `UPDATE analysis_key_behaviors
+                          SET status = $1, reasoning = $2
+                          WHERE id = $3 AND analysis_id = $4`,
+                         [kb.status, kb.reasoning, kb.id, item.id]
+                     );
+                 }
+             }
+          }
         }
       }
     }
 
-    // Save Summary
+    // 3. Save Summary
     if (executiveSummary) {
       const check = await query('SELECT id FROM executive_summary WHERE report_id = $1', [reportId]);
-
-      // CHECK: Does the incoming data actually have content?
       const hasContent = 
         (executiveSummary.strengths && executiveSummary.strengths.trim().length > 0) || 
         (executiveSummary.areas_for_improvement && executiveSummary.areas_for_improvement.trim().length > 0) || 

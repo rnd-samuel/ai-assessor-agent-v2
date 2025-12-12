@@ -53,6 +53,24 @@ export const generateReportDocx = async (reportId: string) => {
   const summary = summaryRes.rows[0] || {};
   const analyses = analysisRes.rows;
 
+  // Fetch Key Behaviors from Child Table
+  const analysisIds = analyses.map((a: any) => a.id);
+  let kbMap: Record<string, any[]> = {};
+
+  if (analysisIds.length > 0) {
+    const kbRes = await query(
+      `SELECT * FROM analysis_key_behaviors
+       WHERE analysis_id = ANY($1::uuid[])
+       ORDER BY level, kb_text`,
+      [analysisIds]
+    );
+
+    kbRes.rows.forEach((kb: any) => {
+      if (!kbMap[kb.analysis_id]) kbMap[kb.analysis_id] = [];
+      kbMap[kb.analysis_id].push(kb);
+    });
+  }
+
   // 4. Load Template
   // In a real app, you'd fetch the specific template file from project_files via GCS.
   // For MVP, we use the local 'template.docx'.
@@ -85,7 +103,11 @@ export const generateReportDocx = async (reportId: string) => {
   }
 
   const zip = new PizZip(content);
-  const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+  const doc = new Docxtemplater(zip, { 
+    paragraphLoop: true,
+    linebreaks: true,
+    nullGetter: () => ""
+   });
 
   // 5. Build Data Map
   const dataMap: any = {
@@ -106,17 +128,22 @@ export const generateReportDocx = async (reportId: string) => {
     dataMap[`${compKey}_explanation`] = item.explanation;
     dataMap[`${compKey}_development`] = item.development_recommendations;
 
-    // Key Behaviors Mapping
+    // Key Behaviors Mapping from Child Table
     // DB stores JSON: [{ kb: "...", fulfilled: true, level: "3" }, ...]
-    const kbList = item.key_behaviors_status || [];
+    const kbRows = kbMap[item.id] || [];
     
     // Group by Level to get the index right (1, 2, 3...)
     const kbsByLevel: Record<string, any[]> = {};
     
-    kbList.forEach((kb: any) => {
-        const lvl = kb.level; 
+    kbRows.forEach((kb: any) => {
+        const lvl = String(kb.level); // Ensure string key
         if(!kbsByLevel[lvl]) kbsByLevel[lvl] = [];
-        kbsByLevel[lvl].push(kb);
+        kbsByLevel[lvl].push({
+            // MAP DB COLUMNS TO TEMPLATE LOGIC
+            kb: kb.kb_text,
+            fulfilled: kb.status === 'FULFILLED', // Map Status to Boolean
+            explanation: kb.reasoning || ""
+        });
     });
 
     // Map specific keys
@@ -144,7 +171,7 @@ export const generateReportDocx = async (reportId: string) => {
     }
 
     const targetLevels = report.target_levels || {};
-    const targetLevelStr = targetLevels[compId];
+    const targetLevelStr = String(targetLevels[compId] || "");
 
     if (targetLevelStr && kbsByLevel[targetLevelStr]) {
         kbsByLevel[targetLevelStr].forEach((kb, index) => {
@@ -170,7 +197,6 @@ export const generateReportDocx = async (reportId: string) => {
   const buf = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
   
   // Filename Format: "DDMMYY - Report - [Report Name].docx"
-  const dateStr = new Date().toISOString().slice(2,10).replace(/-/g,'').split('').reverse().join(''); // This is harder in JS one-liner
   // Let's do it manually for DDMMYY
   const now = new Date();
   const dd = String(now.getDate()).padStart(2, '0');

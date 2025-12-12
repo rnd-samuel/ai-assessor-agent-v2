@@ -1,5 +1,5 @@
 // frontend/src/pages/ReportPage.tsx
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useBlocker } from 'react-router-dom';
 import apiService from '../services/apiService';
 import { useUserStore } from '../state/userStore';
@@ -35,6 +35,7 @@ interface ReportData {
     file_content: string;
   }[];
   dictionary: any;
+  targetLevels: Record<string, string>;
   // These come from the API now, but we store them in separate state
   competencyAnalysis?: CompetencyAnalysis[]; 
   executiveSummary?: any;
@@ -337,6 +338,24 @@ export default function ReportPage() {
   const activeFile = reportData?.rawFiles.find(f => f.id === activeFileId);
 
   const isUserClicking = useRef(false);
+
+  const nameToTargetLevelMap = useMemo(() => {
+    if (!reportData?.dictionary || !reportData?.targetLevels) return {};
+    const map: Record<string, string> = {};
+    const dict = reportData.dictionary.content || reportData.dictionary;
+
+    if (Array.isArray(dict?.kompetensi)) {
+        dict.kompetensi.forEach((c: any) => {
+           const name = c.name || c.namaKompetensi;
+           const id = c.id || name;
+           // If we have a target level for this ID/Name, map the NAME to it.
+           if (reportData.targetLevels[id]) {
+               map[name] = reportData.targetLevels[id];
+           }
+        });
+    }
+    return map;
+  }, [reportData]);
   
   // --- Data Fetching ---
   const fetchReportData = useCallback(async (isBackground = false) => {
@@ -751,6 +770,9 @@ export default function ReportPage() {
     
     if (!reportId) return;
     try {
+      // Optimistic Update: Immediately set status to PROCESSING
+      // This prevents the "Resume" button from staying clickable while waiting for sockets
+      setReportData(prev => prev ? { ...prev, status: 'PROCESSING' } : null);
       // 1. Call the new endpoint to start the job
       await apiService.post(`/reports/${reportId}/generate/phase2`);
       addToast("Phase 2 analysis started...", 'info');
@@ -762,6 +784,8 @@ export default function ReportPage() {
       
     } catch (error: any) {
       console.error(error);
+      // Revert status if the API call itself fails (e.g., 400 Bad Request)
+      setReportData(prev => prev ? { ...prev, status: 'FAILED' } : null);
 
       if (error.response && error.response.status === 400) {
         addToast(error.response.data.message, 'error');
@@ -778,6 +802,9 @@ export default function ReportPage() {
     }
     if (!reportId) return;
     try {
+      //Optimistic Update
+      setReportData(prev => prev ? { ...prev, status: 'PROCESSING' } : null);
+
       setHighestPhaseVisible('summary');
       setAnalysisTab('summary');
 
@@ -786,6 +813,8 @@ export default function ReportPage() {
 
     } catch (error: any) {
       console.error(error);
+      // Revert status on error
+      setReportData(prev => prev ? { ...prev, status: 'COMPLETED' } : null);
       if (error.response && error.response.status === 400) {
         addToast(error.response.data.message, 'error');
       } else {
@@ -1058,6 +1087,8 @@ const blocker = useBlocker(
                           }
                         }}
                         onReset={handleReset}
+                        onResume={handleGeneratePhase2}
+                        targetLevelsMap={nameToTargetLevelMap}
                         onHighlightEvidence={handleQuoteSelection}
                         onAskAI={handleAskAI}
                         data={competencyData}

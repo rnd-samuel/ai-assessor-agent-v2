@@ -1,7 +1,7 @@
 // frontend/src/components/report/CompetencyAnalysisList.tsx
 import { useState } from 'react';
-import CompetencyAnalysisCard from './CompetencyAnalysisCard'; // Types handled inside Card now
-import { type CompetencyAnalysis } from '../../types/assessment'; // Import from shared types
+import CompetencyAnalysisCard from './CompetencyAnalysisCard'; 
+import { type CompetencyAnalysis } from '../../types/assessment'; 
 import LoadingButton from '../LoadingButton';
 
 interface CompetencyAnalysisListProps {
@@ -9,24 +9,28 @@ interface CompetencyAnalysisListProps {
   isViewOnly: boolean;
   onGenerateNext: () => void;
   onReset: () => void;
+  onResume: () => void;
   onHighlightEvidence: (quote: string, source: string) => void;
   onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
   data: CompetencyAnalysis[];
   onChange: (newData: CompetencyAnalysis[]) => void;
   isLastPhase: boolean;
   reportStatus: 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  targetLevelsMap: Record<string, string>;
 }
 
 export default function CompetencyAnalysisList({
   isViewOnly,
   onGenerateNext,
   onReset,
+  onResume,
   onHighlightEvidence,
   onAskAI,
   data,
   onChange,
   isLastPhase,
-  reportStatus
+  reportStatus,
+  targetLevelsMap
 }: CompetencyAnalysisListProps) {
   
   // Filters
@@ -34,12 +38,19 @@ export default function CompetencyAnalysisList({
   const [filterCompetency, setFilterCompetency] = useState('');
 
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
 
   const handleGenerateSummary = async () => {
     setIsGenerating(true);
     await onGenerateNext();
     setIsGenerating(false);
   };
+
+  const handleResume = async () => {
+    setIsResuming(true);
+    await onResume();
+    setIsResuming(false);
+  }
 
   const handleCardChange = (updatedItem: CompetencyAnalysis) => {
     const newData = data.map((item) =>
@@ -120,7 +131,7 @@ export default function CompetencyAnalysisList({
                  <CompetencyAnalysisCard
                     key={item.id}
                     data={item}
-                    targetLevel="3" // TODO: Pass real target level from Report Context
+                    targetLevel={targetLevelsMap[item.competencyName] || "3"}
                     isViewOnly={isViewOnly}
                     onChange={handleCardChange}
                     onAskAI={onAskAI}
@@ -140,6 +151,20 @@ export default function CompetencyAnalysisList({
             Stop Generation
           </button>
         )}
+
+        {/* RESUME BUTTON (Show if failed or partially done) */}
+        {reportStatus === 'FAILED' && !isViewOnly && (
+          <LoadingButton
+            onClick={handleResume}
+            isLoading={isResuming}
+            loadingText="Resuming..."
+            className="bg-primary text-white hover:bg-primary-hover shadow-sm"
+            icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>}
+          >
+            Resume Analysis
+          </LoadingButton>
+        )}
+
         {!isViewOnly && data.length > 0 && !isLastPhase && (
           <LoadingButton
             onClick={handleGenerateSummary}

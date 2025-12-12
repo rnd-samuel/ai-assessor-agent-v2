@@ -164,7 +164,23 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
     );
     const allEvidence = evidenceRes.rows;
 
-    await client.query('DELETE FROM competency_analysis WHERE report_id = $1', [reportId]);
+    // Resume Logic
+    // 1. Check which competencies are already fully analzyed in DB
+    const existingAnalysis = await query(
+      `SELECT competency FROM competency_analysis WHERE report_id = $1`,
+      [reportId]
+    );
+
+    // Create a Set for fast lookup of completed competencies
+    const completedCompetencies = new Set(existingAnalysis.rows.map(r => r.competency));
+
+    if (completedCompetencies.size > 0) {
+      console.log(`[Worker] Found ${completedCompetencies.size} completed competencies. Resuming...`);
+      await publishEvent(userId, 'ai-stream', {
+        reportId,
+        chunk: `\n⏩ Resuming: Found ${completedCompetencies.size} completed analysis sections.\n`
+      });
+    }
 
     // --- 2. ORCHESTRATOR LOOP ---
     for (const comp of dictionary.kompetensi) {
@@ -172,6 +188,12 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       catch (e: any) { if (e.message === "CANCELLED_BY_USER") return { status: 'CANCELLED' }; throw e; }
 
       const compName = comp.name || comp.namaKompetensi;
+
+      // Skip Check: If already done, skip to next
+      if (completedCompetencies.has(compName)) {
+        continue;
+      }
+
       const compId = comp.id || compName; 
       const targetLevel = parseInt(targetLevels[compId] || "3");
 
@@ -196,10 +218,11 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           levelsToTest.push(targetLevel - 1, targetLevel, targetLevel + 1);
       }
       
-      const validLevels = levelsToTest.filter(l => l > 0 && l <= maxDictLevel);
+      const initialLevels = levelsToTest.filter(l => l > 0 && l <= maxDictLevel);
       const levelResults: Record<number, any[]> = {};
 
-      for (const levelNum of validLevels) {
+      // Run Default Batch
+      for (const levelNum of initialLevels) {
          await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 1/3] Checking KB Fulfillment for Level ${levelNum}...\n` });
          
          const judgments = await evaluateKeyBehaviors(
@@ -210,11 +233,68 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
          levelResults[levelNum] = judgments;
       }
 
+      // Upward Expansion Rule
+      // Rule: Move higher ONLY if ALL KBs of ALL tested levels so far are FULFILLED.
+      let currentHigh = Math.max(...initialLevels);
+      
+      while (currentHigh < maxDictLevel) {
+          // Flatten all results collected so far
+          const allKBs = Object.values(levelResults).flat();
+          const allFulfilled = allKBs.every((kb: any) => kb.status === 'FULFILLED');
+
+        if (allFulfilled) {
+          const nextLevel = currentHigh + 1;
+          await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 1/3] 🟢 Perfect Performance. Expanding Upward to Level ${nextLevel}...\n` });
+          
+          const judgments = await evaluateKeyBehaviors(
+              comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
+              simContextMap, kbPrompt, general_context,
+              reportId, userId, currentJobId
+          );
+          levelResults[nextLevel] = judgments;
+          currentHigh = nextLevel;
+        } else {
+            break; // Stop if any imperfection found
+        }
+      }
+
+      // Downward Expansion Rule
+      // Rule: Move lower ONLY if ALL KBs of ALL tested levels so far are NOT FULFILLED (Missed).
+      let currentLow = Math.min(...initialLevels);
+
+      while (currentLow > 1) {
+        const results = levelResults[currentLow];
+        if (!results) break;
+
+        // Flatten all results collected so far
+        const allKBs = Object.values(levelResults).flat();
+        // "Not Fulfilled" covers NOT_OBSERVED and CONTRA_INDICATOR
+        const noneFulfilled = allKBs.every((kb: any) => kb.status !== 'FULFILLED');
+
+        if (noneFulfilled) {
+          const nextLevel = currentLow - 1;
+          await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 1/3] 🔴 Zero Fulfillment. Expanding Downward to Level ${nextLevel}...\n` });
+
+          const judgments = await evaluateKeyBehaviors(
+            comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
+            simContextMap, kbPrompt, general_context,
+            reportId, userId, currentJobId
+          );
+          levelResults[nextLevel] = judgments;
+          currentLow = nextLevel
+        } else {
+          break; // Stop if at least one KB is fulfilled
+        }
+      }
+
+      // Collect all checked levels for Task 2
+      const allCheckedLevels = Object.keys(levelResults).map(Number).sort((a,b) => a - b);
+
       // --- STEP 2: LEVEL ASSIGNMENT & NARRATIVE ---
       await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 2/3] Determining Final Level & Writing Narrative...\n` });
 
       const { finalLevel, explanation } = await determineLevelAndNarrative(
-          compName, targetLevel, validLevels, levelResults, comp.level,
+          compName, targetLevel, allCheckedLevels, levelResults, comp.level,
           narrativeModel, persona_prompt, levelPrompt, general_context,
           reportId, userId, currentJobId
       );
@@ -223,13 +303,17 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 3/3] Generating Recommendations...\n` });
 
       const recommendations = await generateRecommendations(
-          compName, finalLevel, levelResults, 
+          compName, finalLevel, levelResults,
           narrativeModel, persona_prompt, devPrompt,
           reportId, userId, currentJobId
       );
 
       // --- 4. SAVE TO DATABASE ---
       await client.query('BEGIN');
+
+      // Double check cleanup for THIS SPECIFIC competency before inserting
+      // (Handles cases where a previous run crashed mid-save, though unlikely with transaction)
+      await client.query('DELETE FROM competency_analysis WHERE report_id = $1 AND competency = $2', [reportId, compName]);
 
       const analysisInsert = await client.query(
         `INSERT INTO competency_analysis 
@@ -297,7 +381,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
 
 // TASK 1: KEY BEHAVIOR CHECK
 async function evaluateKeyBehaviors(
-    comp: any, level: number, allRelevantEvidence: any[], model: string, persona: string, 
+    comp: any, level: number, allRelevantEvidence: any[], model: string, persona: string,
     simContextMap: Record<string, string>, instructions: string, projectContext: string,
     reportId: string, userId: string, jobId: string
 ) {
@@ -401,7 +485,7 @@ async function determineLevelAndNarrative(
 
     const levelDefs = allLevelDefinitions.map((l: any) => `Level ${l.nomor}: ${l.penjelasan}`).join('\n');
 
-    // FIX: Enforcing JSON Output
+    // Enforcing JSON Output
     const prompt = `
     ${persona}
     ${instructions}
@@ -468,7 +552,6 @@ async function generateRecommendations(
         gapsText = "No specific gaps found (Target exceeded). Focus on mastery.";
     }
 
-    // FIX: Enforcing JSON Output
     const prompt = `
     ${persona}
     ${instructions}
