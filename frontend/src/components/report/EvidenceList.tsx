@@ -2,6 +2,7 @@
 import { useState, useMemo } from 'react';
 import EvidenceCard, { type EvidenceCardData } from './EvidenceCard';
 import LoadingButton from '../LoadingButton';
+import apiService from '../../services/apiService';
 import * as XLSX from 'xlsx';
 import { useToastStore } from '../../state/toastStore';
 
@@ -37,6 +38,7 @@ interface EvidenceListProps {
   onGeneratePhase1: () => void;
   onGenerateNext: () => void;
   onReset: () => void;
+  onRefresh?: () => void;
 }
 
 export default function EvidenceList({
@@ -58,6 +60,7 @@ export default function EvidenceList({
   onGeneratePhase1,
   onGenerateNext,
   onReset,
+  onRefresh
 }: EvidenceListProps) {
   // --- Filter State ---
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -73,6 +76,9 @@ export default function EvidenceList({
   const [isSkipModalOpen, setIsSkipModalOpen] = useState(false);
   const [isGenEvidenceLoading, setIsGenEvidenceLoading] = useState(false);
   const [isNextPhaseLoading, setIsNextPhaseLoading] = useState(false);
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   // --- Derived Data ---
   const { competencyIndexMap, competencyNames } = useMemo(() => {
@@ -141,6 +147,46 @@ export default function EvidenceList({
 
   }, [evidence, filters, competencyIndexMap]);
 
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+      const allIds = filteredEvidence.map(ev => ev.id);
+      setSelectedIds(new Set(allIds));
+    } else {
+      setSelectedIds(new Set());
+    }
+  };
+
+  const handleToggleSelect = (id: string) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedIds(newSet);
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Are you sure you want to delete ${selectedIds.size} evidence items?`)) return;
+
+    setIsBulkDeleting(true);
+    try {
+      await apiService.post('/reports/evidence/bulk-archive', {
+        evidenceIds: Array.from(selectedIds)
+      });
+
+      addToast(`Deleted ${selectedIds.size} items.`, 'success');
+      setSelectedIds(new Set());
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      console.error(error);
+      addToast("Failed to bulk delete.", 'error');
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
   // --- Export Logic ---
   const handleExport = () => {
     const dataToExport = filteredEvidence.map((ev) => ({
@@ -207,6 +253,23 @@ export default function EvidenceList({
           <h3 className="text-lg font-semibold text-text-primary">
             Evidence ({filteredEvidence.length})
           </h3>
+
+          {/* BULK ACTIONS */}
+          {!isViewOnly && selectedIds.size > 0 && (
+            <div className="flex items-center gap-2 ml-4 animate-fade-in">
+              <span className="text-xs text-text-secondary font-medium">{selectedIds.size} selected</span>
+              <LoadingButton
+                variant="danger"
+                className="py-1 px-2 text-xs h-7"
+                onClick={handleBulkDelete}
+                isLoading={isBulkDeleting}
+                loadingText="Deleting..."
+              >
+                Delete
+              </LoadingButton>
+            </div>
+          )}
+
           <div className="flex gap-2">
              <div className="relative">
                 <button
@@ -311,6 +374,21 @@ export default function EvidenceList({
              </button>
           </div>
         </div>
+        {/* Select All Row */}
+        {!isViewOnly && (
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <input
+              type="checkbox"
+              id="select-all-evidence"
+              className="w-4 h-4 rounded border-border accent-primary cursor-pointer"
+              onChange={handleSelectAll}
+              checked={filteredEvidence.length > 0 && selectedIds.size === filteredEvidence.length}
+            />
+            <label htmlFor="select-all-evidence" className="text-xs text-text-secondary cursor-pointer select-none">
+              Select All Visible
+            </label>
+          </div>
+        )}
       </div>
 
       {/* Scrollable List */}
@@ -365,9 +443,11 @@ export default function EvidenceList({
               dictionary={dictionary}
               isActive={activeEvidenceId === ev.id}
               isViewOnly={isViewOnly}
-                onClick={() => onHighlight(ev)}
-                onEdit={onEdit}
-                onDelete={onDelete}
+              onClick={() => onHighlight(ev)}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              isSelected={selectedIds.has(ev.id)}
+              onToggleSelect={() => handleToggleSelect(ev.id)}
             />
           ))}
           {reportStatus === 'PROCESSING' && (

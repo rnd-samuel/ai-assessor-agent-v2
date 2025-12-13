@@ -517,6 +517,46 @@ router.delete('/evidence/:evidenceId', authenticateToken, async (req: Authentica
 });
 
 /**
+ * (New) Bulk Archive Evidence
+ */
+router.post('/evidence/bulk-archive', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  const { evidenceIds } = req.body; // Expects array of strings
+  const userId = req.user?.userId;
+
+  if (!evidenceIds || !Array.isArray(evidenceIds) || evidenceIds.length === 0) {
+    return res.status(400).send({ message: "No evidence IDs provided." });
+  }
+
+  try {
+    // Perform a bulk update with a join to ensure ownership
+    // We only archive rows where the linked report's creator matches the current user
+    const result = await query(
+      `UPDATE evidence e
+       SET is_archived = true, last_edited_at = NOW()
+       FROM reports r
+       WHERE e.report_id = r.id
+         AND e.id = ANY($1::uuid[])
+         AND r.creator_id = $2
+       RETURNING e.id`,
+      [evidenceIds, userId]
+    );
+
+    if (result.rowCount === 0) {
+        return res.status(403).send({ message: "No applicable evidence found or unauthorized." });
+    }
+
+    res.status(200).send({ 
+        message: `Successfully archived ${result.rowCount} evidence items.`,
+        archivedIds: result.rows.map(r => r.id)
+    });
+
+  } catch (error) {
+    console.error("Bulk archive failed:", error);
+    res.status(500).send({ message: "Internal server error." });
+  }
+});
+
+/**
  * (New) Trigger Phase 1 Generation Manually
  */
 router.post('/:id/generate/phase1', authenticateToken, async (req: AuthenticatedRequest, res) => {

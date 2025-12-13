@@ -379,6 +379,15 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
 
 // --- INTELLIGENCE FUNCTIONS ---
 
+function generateDefaultJudgments(lvlObj: any) {
+    return lvlObj.keyBehavior.map((kbText: string) => ({
+        kbText,
+        status: 'NOT_OBSERVED',
+        reasoning: "No evidence found for this key behavior.",
+        evidenceIds: []
+    }));
+}
+
 // TASK 1: KEY BEHAVIOR CHECK
 async function evaluateKeyBehaviors(
     comp: any, level: number, allRelevantEvidence: any[], model: string, persona: string,
@@ -387,6 +396,11 @@ async function evaluateKeyBehaviors(
 ) {
     const lvlObj = comp.level.find((l: any) => String(l.nomor) === String(level));
     if (!lvlObj) return [];
+
+    // If absolutely no evidence exists for this competency, skip AI and return defaults.
+    if (!allRelevantEvidence || allRelevantEvidence.length === 0) {
+        return generateDefaultJudgments(lvlObj);
+    }
 
     const evidenceListText = allRelevantEvidence.map((e: any) => 
         `SOURCE [${e.source}] (ID:${e.id}): "${e.quote}"\n   Context: ${e.reasoning}`
@@ -448,7 +462,7 @@ async function evaluateKeyBehaviors(
 
     if (!parsed.success) {
         console.error("Task 1 Parse Failed", parsed.error, rawContent);
-        return [];
+        return generateDefaultJudgments(lvlObj);
     }
 
     return lvlObj.keyBehavior.map((kbText: string, i: number) => {
@@ -461,7 +475,7 @@ async function evaluateKeyBehaviors(
         return {
             kbText,
             status: aiResult?.status || 'NOT_OBSERVED',
-            reasoning: aiResult?.reasoning || "No data provided by AI.",
+            reasoning: aiResult?.reasoning || "No evidence found for this key behavior.",
             evidenceIds: aiResult?.evidence_quote_ids || []
         };
     });

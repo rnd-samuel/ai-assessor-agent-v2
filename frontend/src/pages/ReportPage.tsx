@@ -1070,6 +1070,7 @@ const blocker = useBlocker(
                         isThinking={isThinking}
                         streamLog={streamLog}
                         isResetting={isResetting}
+                        onRefresh={() => fetchReportData()}
                     />
                 )}
                 

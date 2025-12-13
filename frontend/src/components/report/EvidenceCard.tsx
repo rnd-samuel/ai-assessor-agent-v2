@@ -20,6 +20,8 @@ interface EvidenceCardProps {
   onClick: () => void;
   onEdit: (ev: EvidenceCardData) => void;
   onDelete: (id: string) => void;
+  isSelected: boolean;
+  onToggleSelect: () => void;
 }
 
 export default function EvidenceCard({
@@ -30,6 +32,8 @@ export default function EvidenceCard({
   onClick,
   onEdit,
   onDelete,
+  isSelected,
+  onToggleSelect
 }: EvidenceCardProps) {
   const [showReasoning, setShowReasoning] = useState(false);
 
@@ -47,7 +51,7 @@ export default function EvidenceCard({
     <div
       className={`w-full rounded-lg shadow-sm bg-bg-light border transition-all duration-200 ${
         isActive ? 'border-primary ring-1 ring-primary shadow-md' : 'border-border hover:border-primary/50'
-      } cursor-pointer`} // Always cursor-pointer
+      } cursor-pointer relative`} // Always cursor-pointer
       onClick={onClick} // Always enable click (highlighting)
     >
       {showReasoning ? (
@@ -61,7 +65,18 @@ export default function EvidenceCard({
         <div>
           <div className="p-3 border-b border-border/50 bg-bg-medium/30">
             <div className="flex justify-between items-start mb-1">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
+               {/* Checkbox */}
+               {!isViewOnly && (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded border-border accent-primary cursor-pointer"
+                    checked={isSelected}
+                    onChange={onToggleSelect}
+                  />
+                </div>
+               )}
                <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">{competencyName}</p>
                {/* UI Badge */}
                {evidence.is_ai_generated ? (
