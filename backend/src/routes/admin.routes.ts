@@ -6,6 +6,7 @@ import { query } from '../services/db';
 import { uploadToGCS } from '../services/storage';
 import multer from 'multer';
 import bcrypt from 'bcrypt';
+import { generateFineTuningDataset } from '../services/dataset-service';
 
 // Extend Request type
 interface AuthenticatedRequest extends Request {
@@ -26,55 +27,83 @@ router.use(authenticateToken, authorizeRole('Admin'));
  * Fetch paginated AI logs
  */
 router.get('/logs', async (req: AuthenticatedRequest, res) => {
-    const { page = 1, limit = 20, projectId } = req.query;
+    const { 
+        page = 1, 
+        limit = 20, 
+        projectId, 
+        reportId,
+        model,
+        startDate, 
+        endDate 
+    } = req.query;
+
     const offset = (Number(page) - 1) * Number(limit);
     
     try {
-        let queryStr = `
-            SELECT l.*, u.email as user_email, p.title as project_title 
-            FROM ai_logs l
-            LEFT JOIN users u ON l.user_id = u.id
-            LEFT JOIN projects p ON l.project_id = p.id
-        `;
-        
-        const params: any[] = [Number(limit), offset];
-        let paramCount = 3;
+        let whereClauses: string[] = [];
+        let params: any[] = [];
+        let paramCount = 1;
 
+        // 1. Build Dynamic WHERE clause
         if (projectId) {
-            queryStr += ` WHERE l.project_id = $${paramCount}`;
+            whereClauses.push(`l.project_id = $${paramCount++}`);
             params.push(projectId);
         }
+        if (reportId) {
+            whereClauses.push(`l.report_id = $${paramCount++}`);
+            params.push(reportId);
+        }
+        if (model) {
+            whereClauses.push(`l.model = $${paramCount++}`);
+            params.push(model);
+        }
+        if (startDate) {
+            whereClauses.push(`l.created_at >= $${paramCount++}`);
+            params.push(startDate); // Expect ISO string
+        }
+        if (endDate) {
+            whereClauses.push(`l.created_at <= $${paramCount++}`);
+            params.push(endDate);
+        }
 
-        queryStr += ` ORDER BY l.created_at DESC LIMIT $1 OFFSET $2`;
+        const whereSQL = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
 
-        // Execute count query for pagination
-        const countRes = await query(`SELECT COUNT(*) FROM ai_logs ${projectId ? 'WHERE project_id = $1' : ''}`, projectId ? [projectId] : []);
+        // 2. Count Query
+        const countRes = await query(
+            `SELECT COUNT(*) FROM ai_logs l ${whereSQL}`, 
+            params
+        );
+
+        // 3. Data Query
+        // We add the limit/offset params at the end
+        const finalParams = [...params, Number(limit), offset];
         
-        // Execute data query
-        // Note: We need to handle the dynamic parameter index for limit/offset if projectId exists.
-        // Easier way:
-        const finalQuery = `
-            SELECT l.id, l.action, l.model, l.cost_usd, l.duration_ms, l.status, l.created_at, l.input_tokens, l.output_tokens,
-                   u.email as user_email, p.name as project_title,
-                   left(l.prompt_snapshot, 100) as prompt_preview -- optimization
+        const dataQuery = `
+            SELECT l.id, l.action, l.model, l.cost_usd, l.duration_ms, l.status, l.created_at, 
+                   l.input_tokens, l.output_tokens,
+                   u.email as user_email, 
+                   p.name as project_title,
+                   r.title as report_title
             FROM ai_logs l
             LEFT JOIN users u ON l.user_id = u.id
             LEFT JOIN projects p ON l.project_id = p.id
-            ${projectId ? `WHERE l.project_id = '${projectId}'` : ''}
+            LEFT JOIN reports r ON l.report_id = r.id
+            ${whereSQL}
             ORDER BY l.created_at DESC 
-            LIMIT ${Number(limit)} OFFSET ${offset}
+            LIMIT $${paramCount} OFFSET $${paramCount + 1}
         `;
 
-        const logs = await query(finalQuery);
+        const logs = await query(dataQuery, finalParams);
 
         res.json({
             data: logs.rows,
             total: Number(countRes.rows[0].count),
-            page: Number(page)
+            page: Number(page),
+            limit: Number(limit)
         });
 
     } catch (error) {
-        console.error(error);
+        console.error("Fetch Logs Error:", error);
         res.status(500).send({ message: "Failed to fetch logs" });
     }
 });
@@ -85,11 +114,126 @@ router.get('/logs', async (req: AuthenticatedRequest, res) => {
  */
 router.get('/logs/:id', async (req: AuthenticatedRequest, res) => {
     try {
-        const result = await query("SELECT * FROM ai_logs WHERE id = $1", [req.params.id]);
-        if (result.rows.length === 0) return res.status(404).send({ message: "Log not found" });
-        res.json(result.rows[0]);
+        // 1. Fetch the log entry
+        const logRes = await query("SELECT * FROM ai_logs WHERE id = $1", [req.params.id]);
+        if (logRes.rows.length === 0) {
+            return res.status(404).send({ message: "Log not found" });
+        }
+        
+        const log = logRes.rows[0];
+        let currentContent = null;
+
+        // 2. Fetch the "Real World" result based on the action type
+        // This allows us to compare the original AI output vs. what is currently in the DB (User Edits)
+        switch (log.action) {
+            case 'PHASE_1_EXTRACTION':
+                // Fetch all evidence items created by this log (even if archived/deleted, to show history)
+                const evRes = await query(
+                    `SELECT id, competency, level, kb, quote, source, reasoning, is_archived 
+                     FROM evidence 
+                     WHERE ai_log_id = $1
+                     ORDER BY is_archived ASC, created_at ASC`, 
+                    [log.id]
+                );
+                currentContent = evRes.rows;
+                break;
+
+            case 'PHASE_2_JUDGMENT':
+                // Fetch the Key Behavior judgments linked to this log
+                const kbRes = await query(
+                    `SELECT id, level, kb_text, status, reasoning 
+                     FROM analysis_key_behaviors 
+                     WHERE judgment_log_id = $1
+                     ORDER BY level, kb_text`, 
+                    [log.id]
+                );
+                currentContent = kbRes.rows;
+                break;
+
+            case 'PHASE_2_NARRATIVE':
+                // Fetch the Level & Explanation linked to this log
+                const narrativeRes = await query(
+                    `SELECT id, competency, level_achieved, explanation 
+                     FROM competency_analysis 
+                     WHERE narrative_log_id = $1`, 
+                    [log.id]
+                );
+                // Usually returns 1 row
+                currentContent = narrativeRes.rows.length > 0 ? narrativeRes.rows[0] : null;
+                break;
+
+            case 'PHASE_2_RECOMMENDATIONS':
+                // Fetch the Recommendations linked to this log
+                const recRes = await query(
+                    `SELECT id, competency, development_recommendations 
+                     FROM competency_analysis 
+                     WHERE recommendations_log_id = $1`, 
+                    [log.id]
+                );
+                // Usually returns 1 row
+                currentContent = recRes.rows.length > 0 ? recRes.rows[0] : null;
+                break;
+
+            case 'PHASE_3_CRITIQUE':
+                // Fetch the final Executive Summary linked to this log
+                const summaryRes = await query(
+                    `SELECT id, overview, strengths, areas_for_improvement, recommendations 
+                     FROM executive_summary 
+                     WHERE ai_log_id = $1`, 
+                    [log.id]
+                );
+                // Usually returns 1 row
+                currentContent = summaryRes.rows.length > 0 ? summaryRes.rows[0] : null;
+                break;
+            
+            case 'PHASE_3_DRAFT':
+                // Drafts are intermediate and usually not saved to the final table with a unique ID link 
+                // (only the final critique is). So we likely won't find a direct link unless we chose to store draft_log_id.
+                // For now, we return null, or you could try to fetch the summary if you assume 1:1 mapping (risky).
+                currentContent = null; 
+                break;
+
+            default:
+                // Unknown action or generic log (no linked content)
+                currentContent = null;
+                break;
+        }
+
+        // 3. Return combined data
+        res.json({
+            ...log,
+            current_content_snapshot: currentContent // The frontend will use this to Diff
+        });
+
     } catch (error) {
+        console.error("Error fetching log details:", error);
         res.status(500).send({ message: "Error fetching log details" });
+    }
+});
+
+router.get('/dataset/export', async (req: AuthenticatedRequest, res) => {
+    try {
+        // Extract filters from query string
+        const filters = {
+            startDate: req.query.startDate as string,
+            endDate: req.query.endDate as string,
+            projectId: req.query.projectId as string,
+            reportId: req.query.reportId as string,
+            model: req.query.model as string
+        };
+
+        const dataset = await generateFineTuningDataset(filters);
+        
+        // Convert to JSONL string
+        const jsonl = dataset.map(d => JSON.stringify(d)).join('\n');
+        
+        res.setHeader('Content-Type', 'application/jsonl');
+        res.setHeader('Content-Disposition', 'attachment; filename="fine_tuning_data.jsonl"');
+        res.send(jsonl);
+
+    } catch (error) {
+        console.error("Export Error:", error);
+        res.status(500).send({ message: "Failed to generate dataset" });
     }
 });
 

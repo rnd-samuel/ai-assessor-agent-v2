@@ -55,20 +55,11 @@ interface LogEntry {
   output_tokens: number;
   user_email?: string;
   project_title?: string;
+  report_title?: string;
   prompt_snapshot?: string;
   ai_response_snapshot?: string;
+  current_content_snapshot?: any;
 }
-
-// Helper to pretty-print JSON content in logs
-const tryFormatJSON = (str: string | undefined) => {
-  if (!str) return "";
-  try {
-    const obj = JSON.parse(str);
-    return JSON.stringify(obj, null, 2);
-  } catch (e) {
-    return str;
-  }
-};
 
 // Helper to check if model supports temperature
 const supportsTemperature = (model: string) => {
@@ -87,8 +78,16 @@ export default function AdminPanelPage() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsPage, setLogsPage] = useState(1);
   const [totalLogs, setTotalLogs] = useState(0);
-  const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [logFilters, setLogFilters] = useState({
+    startDate: '',
+    endDate: '',
+    projectId: '',
+    model: ''
+  });
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [projectOptions, setProjectOptions] = useState<{id: string, name: string}[]>([]);
   
   // State for all modals
   const [modals, setModals] = useState({
@@ -292,7 +291,13 @@ export default function AdminPanelPage() {
   const fetchLogs = async (page = 1) => {
     setIsLoadingLogs(true);
     try {
-      const response = await apiService.get(`/admin/logs?page=${page}&limit=20`);
+      const params = new URLSearchParams({
+         page: page.toString(),
+         limit: '20',
+         ...logFilters
+      });
+
+      const response = await apiService.get(`/admin/logs?${params.toString()}`);
       setLogs(response.data.data);
       setTotalLogs(response.data.total);
       setLogsPage(response.data.page);
@@ -305,18 +310,48 @@ export default function AdminPanelPage() {
   };
 
   useEffect(() => {
+     if (activeTab === 'logging') {
+        // Fetch Projects
+        apiService.get('/projects').then(res => setProjectOptions(res.data)).catch(console.error);
+        // Fetch unique models from logs (or use aiModelsList if static)
+        // For now, let's just hardcode common ones or fetch from stats
+        setModelOptions([
+            'google/gemini-2.5-flash-lite-preview-09-2025',
+            'google/gemini-2.5-pro',
+            'google/gemini-3-pro-preview',
+            'openrouter/openai/gpt-5.1'
+        ]);
+     }
+  }, [activeTab]);
+
+  useEffect(() => {
     if (activeTab === 'logging') {
       fetchLogs(logsPage);
     }
   }, [activeTab, logsPage]);
 
-  const handleViewLogDetails = async (id: string) => {
+  const handleExportDataset = async () => {
+    setIsExporting(true);
     try {
-      const res = await apiService.get(`/admin/logs/${id}`);
-      setSelectedLog(res.data);
-      openModal('logDetails');
-    } catch(e) { 
-      addToast("Failed to fetch log details", 'error'); 
+      const response = await apiService.get('/admin/dataset/export', {
+        params: logFilters,
+        responseType: 'blob' // Important for file download
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'fine_tuning_data.jsonl');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      addToast("Dataset exported successfully.", 'success');
+    } catch (error) {
+      console.error("Export failed:", error);
+      addToast("Failed to export dataset.", 'error');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -926,28 +961,98 @@ export default function AdminPanelPage() {
           {activeTab === 'logging' && (
             <div className="space-y-6">
               <div className="flex justify-between items-center">
-                <h3 className="text-lg font-semibold text-text-primary">Comprehensive Logging</h3>
-                <div className="flex gap-2">
-                    <button onClick={() => fetchLogs(logsPage)} className="text-sm text-primary hover:underline">Refresh</button>
-                    <button onClick={() => openModal('exportLogs')} className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                    Export Logs
-                    </button>
-                </div>
+                <h3 className="text-lg font-semibold text-text-primary">System Logs</h3>
+                {/* Export Button now just triggers a download with current filters */}
+                <LoadingButton 
+                    onClick={handleExportDataset}
+                    isLoading={isExporting}
+                    loadingText="Exporting..."
+                    className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover flex items-center gap-2"
+                    icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>}
+                >
+                    Export Current View
+                </LoadingButton>
               </div>
 
-              {/* Log Table (A7) */}
+              {/* Filter Bar */}
+              <div className="bg-white p-4 rounded-lg border border-border flex flex-wrap gap-4 items-end">
+                  <div>
+                      <label className="text-xs font-semibold text-text-secondary mb-1 block">Date Range</label>
+                      <input 
+                        type="date" 
+                        className="rounded-md border border-border px-3 py-2 text-sm"
+                        value={logFilters.startDate}
+                        onChange={e => setLogFilters({...logFilters, startDate: e.target.value})}
+                      />
+                      <span className="mx-2 text-text-muted">-</span>
+                      <input 
+                        type="date" 
+                        className="rounded-md border border-border px-3 py-2 text-sm"
+                        value={logFilters.endDate}
+                        onChange={e => setLogFilters({...logFilters, endDate: e.target.value})}
+                      />
+                  </div>
+
+                  <div>
+                      <label className="text-xs font-semibold text-text-secondary mb-1 block">Project</label>
+                      <select 
+                        className="rounded-md border border-border px-3 py-2 text-sm w-48"
+                        value={logFilters.projectId}
+                        onChange={e => setLogFilters({...logFilters, projectId: e.target.value})}
+                      >
+                          <option value="">All Projects</option>
+                          {projectOptions.map(p => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                      </select>
+                  </div>
+
+                  <div>
+                      <label className="text-xs font-semibold text-text-secondary mb-1 block">Model</label>
+                      <select 
+                        className="rounded-md border border-border px-3 py-2 text-sm w-48"
+                        value={logFilters.model}
+                        onChange={e => setLogFilters({...logFilters, model: e.target.value})}
+                      >
+                          <option value="">All Models</option>
+                          {modelOptions.map(m => (
+                              <option key={m} value={m}>{m}</option>
+                          ))}
+                      </select>
+                  </div>
+
+                  <button 
+                    onClick={() => fetchLogs(1)}
+                    className="bg-bg-medium text-text-primary hover:bg-border border border-transparent rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                  >
+                    Apply Filters
+                  </button>
+                  
+                  <button 
+                    onClick={() => {
+                        setLogFilters({ startDate: '', endDate: '', projectId: '', model: '' });
+                        // We need a way to trigger fetch after state update. 
+                        // For simplicity, we just clear state here and user clicks Apply, 
+                        // or we can use a useEffect on filters (optional).
+                    }}
+                    className="text-sm text-text-muted hover:text-primary underline ml-auto"
+                  >
+                    Clear
+                  </button>
+              </div>
+
+              {/* Log Table */}
               <div className="overflow-x-auto border border-border rounded-lg bg-bg-light shadow-sm">
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="bg-bg-medium border-b border-border text-xs uppercase text-text-muted">
                       <th className="p-3 font-semibold">Timestamp</th>
                       <th className="p-3 font-semibold">Action</th>
-                      <th className="p-3 font-semibold">User / Project</th>
+                      <th className="p-3 font-semibold">Project / Report</th>
                       <th className="p-3 font-semibold">Model</th>
+                      <th className="p-3 font-semibold text-right">Tokens (In/Out)</th>
                       <th className="p-3 font-semibold text-right">Cost ($)</th>
                       <th className="p-3 font-semibold text-center">Status</th>
-                      <th className="p-3 font-semibold"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -958,15 +1063,22 @@ export default function AdminPanelPage() {
                     ) : (
                         logs.map((log) => (
                             <tr key={log.id} className="hover:bg-bg-medium/50 transition-colors">
-                                <td className="p-3 whitespace-nowrap text-text-secondary">
+                                <td className="p-3 whitespace-nowrap text-text-secondary text-xs">
                                     {new Date(log.created_at).toLocaleString()}
                                 </td>
-                                <td className="p-3 font-medium text-text-primary">{log.action}</td>
+                                <td className="p-3">
+                                    <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded border border-gray-200">
+                                        {log.action}
+                                    </span>
+                                </td>
                                 <td className="p-3 text-xs">
-                                    <div className="font-medium text-text-primary">{log.user_email || 'System'}</div>
-                                    <div className="text-text-muted truncate max-w-[150px]">{log.project_title || '-'}</div>
+                                    <div className="font-medium text-text-primary">{log.project_title || '-'}</div>
+                                    <div className="text-text-muted truncate max-w-[200px]" title={log.report_title}>{log.report_title || '-'}</div>
                                 </td>
                                 <td className="p-3 text-xs text-text-secondary">{log.model}</td>
+                                <td className="p-3 text-right text-xs text-text-muted">
+                                    {log.input_tokens} / {log.output_tokens}
+                                </td>
                                 <td className="p-3 text-right font-mono text-xs">
                                     ${Number(log.cost_usd).toFixed(5)}
                                 </td>
@@ -974,14 +1086,6 @@ export default function AdminPanelPage() {
                                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${log.status === 'SUCCESS' ? 'bg-success/10 text-success' : 'bg-error/10 text-error'}`}>
                                         {log.status}
                                     </span>
-                                </td>
-                                <td className="p-3 text-right">
-                                    <button 
-                                        onClick={() => handleViewLogDetails(log.id)}
-                                        className="text-xs font-medium text-primary hover:underline"
-                                    >
-                                        Details
-                                    </button>
                                 </td>
                             </tr>
                         ))
@@ -996,14 +1100,14 @@ export default function AdminPanelPage() {
                   <div className="flex gap-2">
                       <button 
                         disabled={logsPage === 1}
-                        onClick={() => setLogsPage(p => Math.max(1, p - 1))}
+                        onClick={() => fetchLogs(Math.max(1, logsPage - 1))}
                         className="px-3 py-1 border border-border rounded hover:bg-bg-medium disabled:opacity-50"
                       >
                         Previous
                       </button>
                       <button 
-                        disabled={logs.length < 20} // Simple check assuming limit=20
-                        onClick={() => setLogsPage(p => p + 1)}
+                        disabled={logs.length < 20} 
+                        onClick={() => fetchLogs(logsPage + 1)}
                         className="px-3 py-1 border border-border rounded hover:bg-bg-medium disabled:opacity-50"
                       >
                         Next
@@ -1011,7 +1115,7 @@ export default function AdminPanelPage() {
                   </div>
               </div>
             </div>
-          )}
+           )}
 
           {/* Knowledge Base Tab (A11-A14) */}
           {activeTab === 'knowledge' && (
@@ -1568,75 +1672,29 @@ export default function AdminPanelPage() {
       {/* --- MODALS --- */}
 
       {/* Log Details Modal (A9) */}
-      {modals.logDetails && selectedLog && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => closeModal('logDetails')}>
-          <div className="w-full max-w-4xl bg-bg-light rounded-lg shadow-lg flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-6 border-b border-border">
-              <h3 className="text-xl font-semibold text-text-primary">Log Details: {selectedLog.action}</h3>
-              <button className="text-text-muted hover:text-text-primary" onClick={() => closeModal('logDetails')}>&times;</button>
-            </div>
-            
-            <div className="p-6 space-y-6 overflow-y-auto">
-              {/* Metadata Grid */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm bg-bg-medium/30 p-4 rounded-lg border border-border">
-                <div><span className="block text-xs font-bold text-text-muted uppercase">Date</span> {new Date(selectedLog.created_at).toLocaleString()}</div>
-                <div><span className="block text-xs font-bold text-text-muted uppercase">Status</span> <span className={selectedLog.status === 'SUCCESS' ? 'text-success' : 'text-error'}>{selectedLog.status}</span></div>
-                <div><span className="block text-xs font-bold text-text-muted uppercase">Duration</span> {selectedLog.duration_ms}ms</div>
-                <div><span className="block text-xs font-bold text-text-muted uppercase">Cost</span> ${Number(selectedLog.cost_usd).toFixed(6)}</div>
-                
-                <div className="col-span-2"><span className="block text-xs font-bold text-text-muted uppercase">Model</span> {selectedLog.model}</div>
-                <div className="col-span-2"><span className="block text-xs font-bold text-text-muted uppercase">Tokens</span> {selectedLog.input_tokens} In / {selectedLog.output_tokens} Out</div>
-              </div>
+      {/* Removed for simplicity */}
 
-              {/* Prompt Snapshot */}
-              <div>
-                <h4 className="text-sm font-bold text-text-primary mb-2">Prompt (Input)</h4>
-                <div className="bg-bg-medium p-4 rounded-lg border border-border overflow-x-auto">
-                    <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap">
-                        {tryFormatJSON(selectedLog.prompt_snapshot)}
-                    </pre>
-                </div>
-              </div>
-
-              {/* Response Snapshot */}
-              <div>
-                <h4 className="text-sm font-bold text-text-primary mb-2">AI Response (Output)</h4>
-                <div className="bg-bg-medium p-4 rounded-lg border border-border overflow-x-auto">
-                    <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap">
-                        {tryFormatJSON(selectedLog.ai_response_snapshot)}
-                    </pre>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-4 bg-bg-medium border-t border-border flex justify-end">
-              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2" onClick={() => closeModal('logDetails')}>Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Export Logs Modal (A10) */}
+      {/* Export Logs Modal */}
       {modals.exportLogs && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-40" onClick={() => closeModal('exportLogs')}>
-          <div className="w-full max-w-2xl bg-bg-light rounded-lg shadow-lg flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-md bg-bg-light rounded-lg shadow-lg flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-6 border-b border-border">
-              <h3 className="text-xl font-semibold text-text-primary">Export Comprehensive Logs</h3>
+              <h3 className="text-xl font-semibold text-text-primary">Export Options</h3>
               <button className="text-text-muted hover:text-text-primary" onClick={() => closeModal('exportLogs')}>&times;</button>
             </div>
-            <div className="p-6 space-y-4">
-              {/* ... (Date Range Picker) ... */}
-              <div>
-                <label htmlFor="export-format" className="text-sm font-medium text-text-primary mb-1 block">Export Format:</label>
-                <select id="export-format" className="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
-                  <option value="csv">CSV</option>
-                  <option value="json">JSON</option>
-                </select>
-              </div>
-            </div>
-            <div className="p-4 bg-bg-medium border-t border-border flex justify-end gap-3">
-              <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2" onClick={() => closeModal('exportLogs')}>Cancel</button>
-              <button className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2">Export</button>
+            <div className="p-6">
+                <p className="text-sm text-text-secondary mb-4">
+                    Download the raw log data for auditing or external analysis. 
+                    For model training, use the <strong>"Export Training Data"</strong> button on the main dashboard instead.
+                </p>
+                <div className="flex gap-4">
+                    <button className="flex-1 bg-white border border-border hover:bg-bg-medium text-text-primary font-medium py-2 rounded">
+                        Download CSV
+                    </button>
+                    <button className="flex-1 bg-white border border-border hover:bg-bg-medium text-text-primary font-medium py-2 rounded">
+                        Download JSON
+                    </button>
+                </div>
             </div>
           </div>
         </div>

@@ -67,7 +67,7 @@ async function smartAIRequest(
 
     // Log Success
     const usage = response.usage || { prompt_tokens: 0, completion_tokens: 0 };
-    await logAIInteraction({
+    const aiLogId = await logAIInteraction({
       userId, reportId, projectId,
       action: actionName,
       model: payload.model,
@@ -79,7 +79,7 @@ async function smartAIRequest(
       status: 'SUCCESS'
     });
 
-    return response;
+    return { response, aiLogId };
   } catch (error: any) {
     // Log Failure
     await logAIInteraction({
@@ -275,18 +275,20 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       
       const initialLevels = levelsToTest.filter(l => l > 0 && l <= maxDictLevel);
       const levelResults: Record<number, any[]> = {};
+      const levelLogIds: Record<number, string | null> = {};
 
       // Run Default Batch
       for (const levelNum of initialLevels) {
          await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 1/3] Checking KB Fulfillment for Level ${levelNum}...\n` });
          
-         const judgments = await evaluateKeyBehaviors(
+         const { judgments, aiLogId } = await evaluateKeyBehaviors(
             comp, levelNum, relevantEvidence, judgmentModel, 
             persona_prompt, simContextMap, kbPrompt,
             general_context, specificContext,
             reportId, userId, currentJobId, projectId
          );
          levelResults[levelNum] = judgments;
+         levelLogIds[levelNum] = aiLogId;
       }
 
       // Upward Expansion Rule
@@ -302,12 +304,13 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           const nextLevel = currentHigh + 1;
           await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 1/3] 🟢 Perfect Performance. Expanding Upward to Level ${nextLevel}...\n` });
           
-          const judgments = await evaluateKeyBehaviors(
+          const { judgments, aiLogId } = await evaluateKeyBehaviors(
             comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
             simContextMap, kbPrompt, general_context, specificContext,
             reportId, userId, currentJobId, projectId
           );
           levelResults[nextLevel] = judgments;
+          levelLogIds[nextLevel] = aiLogId;
           currentHigh = nextLevel;
         } else {
             break; // Stop if any imperfection found
@@ -331,12 +334,13 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           const nextLevel = currentLow - 1;
           await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 1/3] 🔴 Zero Fulfillment. Expanding Downward to Level ${nextLevel}...\n` });
 
-          const judgments = await evaluateKeyBehaviors(
+          const { judgments, aiLogId } = await evaluateKeyBehaviors(
             comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
             simContextMap, kbPrompt, general_context, specificContext,
             reportId, userId, currentJobId, projectId
           );
           levelResults[nextLevel] = judgments;
+          levelLogIds[nextLevel] = aiLogId;
           currentLow = nextLevel
         } else {
           break; // Stop if at least one KB is fulfilled
@@ -349,7 +353,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       // --- STEP 2: LEVEL ASSIGNMENT & NARRATIVE ---
       await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 2/3] Determining Final Level & Writing Narrative...\n` });
 
-      const { finalLevel, explanation } = await determineLevelAndNarrative(
+      const { finalLevel, explanation, aiLogId: narrativeLogId } = await determineLevelAndNarrative(
           compName, targetLevel, allCheckedLevels, levelResults, comp.level,
           narrativeModel, persona_prompt, levelPrompt, general_context, specificContext,
           reportId, userId, currentJobId, projectId
@@ -363,6 +367,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           narrativeModel, persona_prompt, devPrompt, general_context,
           specificContext, reportId, userId, currentJobId, projectId
       );
+      const recLogId = recommendations.aiLogId;
 
       // --- 4. SAVE TO DATABASE ---
       await client.query('BEGIN');
@@ -373,24 +378,27 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
 
       const analysisInsert = await client.query(
         `INSERT INTO competency_analysis 
-         (report_id, competency, level_achieved, explanation, development_recommendations)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+         (report_id, competency, level_achieved, explanation, development_recommendations, narrative_log_id, recommendations_log_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
         [
           reportId, compName, finalLevel, explanation,
           `**Personal Development:**\n${recommendations.individual}\n\n` +
           `**Assignment:**\n${recommendations.assignment}\n\n` +
-          `**Training:**\n${recommendations.training}`
+          `**Training:**\n${recommendations.training}`,
+          narrativeLogId,
+          recLogId
         ]
       );
       const analysisId = analysisInsert.rows[0].id;
 
       for (const [lvlStr, kbs] of Object.entries(levelResults)) {
           const levelNum = parseInt(lvlStr);
+          const judgmentLogId = levelLogIds[levelNum];
           for (const kb of (kbs as any[])) {
               const kbInsert = await client.query(
-                  `INSERT INTO analysis_key_behaviors (analysis_id, level, kb_text, status, reasoning)
-                   VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-                  [analysisId, levelNum, kb.kbText, kb.status, kb.reasoning]
+                  `INSERT INTO analysis_key_behaviors (analysis_id, level, kb_text, status, reasoning, judgment_log_id)
+                   VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+                  [analysisId, levelNum, kb.kbText, kb.status, kb.reasoning, judgmentLogId]
               );
               
               if (kb.evidenceIds && kb.evidenceIds.length > 0) {
@@ -502,7 +510,7 @@ async function evaluateKeyBehaviors(
     }
     `;
 
-    const response = await smartAIRequest(
+    const { response, aiLogId } = await smartAIRequest(
         {
             model: model,
             messages: [{ role: "user", content: prompt }],
@@ -521,10 +529,10 @@ async function evaluateKeyBehaviors(
 
     if (!parsed.success) {
         console.error("Task 1 Parse Failed", parsed.error, rawContent);
-        return generateDefaultJudgments(lvlObj);
+        return { judgments: generateDefaultJudgments(lvlObj), aiLogId: null };
     }
 
-    return lvlObj.keyBehavior.map((kbText: string, i: number) => {
+    const judgments = lvlObj.keyBehavior.map((kbText: string, i: number) => {
         let aiResult: typeof parsed.data.key_behaviors[number] | undefined = parsed.data.key_behaviors[i];
         
         if (!aiResult) {
@@ -538,6 +546,8 @@ async function evaluateKeyBehaviors(
             evidenceIds: aiResult?.evidence_quote_ids || []
         };
     });
+
+    return { judgments, aiLogId };
 }
 
 // TASK 2: LEVEL ASSIGNMENT & NARRATIVE
@@ -587,7 +597,7 @@ async function determineLevelAndNarrative(
     }
     `;
 
-    const response = await smartAIRequest(
+    const { response, aiLogId } = await smartAIRequest(
         {
             model: model,
             messages: [{ role: "user", content: prompt }],
@@ -602,9 +612,9 @@ async function determineLevelAndNarrative(
     
     if (!parsed.success) {
         console.error("Task 2 Parse Failed", parsed.error, raw);
-        return { finalLevel: 0, explanation: "Error generating explanation." };
+        return { finalLevel: 0, explanation: "Error generating explanation.", aiLogId: null };
     }
-    return { finalLevel: parsed.data.final_level, explanation: parsed.data.explanation };
+    return { finalLevel: parsed.data.final_level, explanation: parsed.data.explanation, aiLogId };
 }
 
 // TASK 3: DEVELOPMENT RECOMMENDATIONS
@@ -654,7 +664,7 @@ async function generateRecommendations(
     }
     `;
 
-    const response = await smartAIRequest(
+    const { response, aiLogId } = await smartAIRequest(
         {
             model: model,
             messages: [{ role: "user", content: prompt }],
@@ -669,7 +679,7 @@ async function generateRecommendations(
 
     if (!parsed.success) {
         console.error("Task 3 Parse Failed", parsed.error, raw);
-        return { individual: "No data", assignment: "No data", training: "No data" };
+        return { individual: "No data", assignment: "No data", training: "No data", aiLogId: null };
     }
-    return parsed.data;
+    return { ...parsed.data, aiLogId };
 }

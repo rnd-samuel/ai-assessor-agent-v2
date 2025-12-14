@@ -62,7 +62,7 @@ async function smartAIRequest(
 
     // Log Success
     const usage = response.usage || { prompt_tokens: 0, completion_tokens: 0 };
-    await logAIInteraction({
+    const aiLogId = await logAIInteraction({
       userId, reportId, projectId,
       action: actionName,
       model: payload.model,
@@ -73,7 +73,7 @@ async function smartAIRequest(
       durationMs: Date.now() - startTime,
       status: 'SUCCESS'
     });
-    return response;
+    return { response, aiLogId };
   } catch (error: any) {
     // LOG FAILURE
     await logAIInteraction({
@@ -187,7 +187,7 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     }
     `;
 
-    const draftRes = await smartAIRequest({
+    const { response: draftRes } = await smartAIRequest({
         model: narrativeModel, // High reasoning for synthesis
         messages: [{ role: "user", content: draftPrompt }],
         response_format: { type: "json_object" },
@@ -228,7 +228,7 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     }
     `;
 
-    const finalRes = await smartAIRequest({
+    const { response: finalRes, aiLogId: critiqueLogId } = await smartAIRequest({
         model: narrativeModel,
         messages: [{ role: "user", content: critiquePrompt }],
         response_format: { type: "json_object" },
@@ -259,9 +259,9 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     await client.query('BEGIN');
     await client.query('DELETE FROM executive_summary WHERE report_id = $1', [reportId]);
     await client.query(
-      `INSERT INTO executive_summary (report_id, overview, strengths, areas_for_improvement, recommendations)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [reportId, result.overview, result.strengths, result.weaknesses, result.recommendations]
+      `INSERT INTO executive_summary (report_id, overview, strengths, areas_for_improvement, recommendations, ai_log_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [reportId, result.overview, result.strengths, result.weaknesses, result.recommendations, critiqueLogId]
     );
     await client.query("UPDATE reports SET status = 'COMPLETED', active_phase = NULL WHERE id = $1", [reportId]);
     await client.query('COMMIT');

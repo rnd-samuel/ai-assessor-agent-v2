@@ -324,6 +324,8 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
             let fullResponse = "";
             let usageData = { prompt_tokens: 0, completion_tokens: 0 };
 
+            let aiLogId: string | null = null;
+
             const messagesPayload = [
               { role: "system" as const, content: systemPrompt },
               { role: "user" as const, content: userPrompt },
@@ -364,7 +366,7 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
 
               clearInterval(checkInterval);
 
-              await logAIInteraction({
+              aiLogId = await logAIInteraction({
                 userId, 
                 reportId, 
                 projectId: report.project_id,
@@ -440,8 +442,8 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
                   }
 
                   await poolClient.query(
-                    `INSERT INTO evidence (report_id, competency, level, kb, quote, source, reasoning, is_ai_generated)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                    `INSERT INTO evidence (report_id, competency, level, kb, quote, source, reasoning, is_ai_generated, ai_log_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
                     [
                       reportId,
                       compName,
@@ -450,7 +452,8 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
                       quote,
                       sourceTag,
                       item.reasoning || "",
-                      true
+                      true,
+                      aiLogId
                     ]
                   );
                 }
