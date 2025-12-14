@@ -30,7 +30,7 @@ const calculateHash = (buffer: Buffer): string => {
 
 // Validation Regexes
 // 1. Static: overall_strength, overall_weakness, overall_development
-const STATIC_PATTERN = /^(overall_strength|overall_weakness|overall_development)$/;
+const STATIC_PATTERN = /^(overview|overall_strength|overall_weakness|overall_development)$/;
 
 // 2. Dynamic Competency: [Name] + suffix
 // Suffixes: _level, _explanation, _development

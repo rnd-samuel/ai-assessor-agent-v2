@@ -113,6 +113,7 @@ export const generateReportDocx = async (reportId: string) => {
   const dataMap: any = {
     report_title: report.title,
     // RP-7.18 Placeholders
+    overview: summary.overview || "",
     overall_strength: summary.strengths || "",
     overall_weakness: summary.areas_for_improvement || "",
     overall_development: summary.recommendations || "",
