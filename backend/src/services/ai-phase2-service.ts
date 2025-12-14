@@ -141,9 +141,10 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       temperature = aiConfig.judgmentTemp ?? 0.2;
     }
 
-    const reportRes = await query('SELECT project_id, target_levels FROM reports WHERE id = $1', [reportId]);
+    const reportRes = await query('SELECT project_id, target_levels, specific_context FROM reports WHERE id = $1', [reportId]);
     const report = reportRes.rows[0];
     const targetLevels = report.target_levels || {};
+    const specificContext = report.specific_context || "";
 
     const projectRes = await query(
       `SELECT 
@@ -251,7 +252,8 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
          const judgments = await evaluateKeyBehaviors(
             comp, levelNum, relevantEvidence, judgmentModel, 
             persona_prompt, simContextMap, kbPrompt,
-            general_context, reportId, userId, currentJobId
+            general_context, specificContext,
+            reportId, userId, currentJobId
          );
          levelResults[levelNum] = judgments;
       }
@@ -270,9 +272,9 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           await publishEvent(userId, 'ai-stream', { reportId, chunk: `> [Task 1/3] 🟢 Perfect Performance. Expanding Upward to Level ${nextLevel}...\n` });
           
           const judgments = await evaluateKeyBehaviors(
-              comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
-              simContextMap, kbPrompt, general_context,
-              reportId, userId, currentJobId
+            comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
+            simContextMap, kbPrompt, general_context, specificContext,
+            reportId, userId, currentJobId
           );
           levelResults[nextLevel] = judgments;
           currentHigh = nextLevel;
@@ -300,7 +302,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
 
           const judgments = await evaluateKeyBehaviors(
             comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
-            simContextMap, kbPrompt, general_context,
+            simContextMap, kbPrompt, general_context, specificContext,
             reportId, userId, currentJobId
           );
           levelResults[nextLevel] = judgments;
@@ -318,7 +320,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
 
       const { finalLevel, explanation } = await determineLevelAndNarrative(
           compName, targetLevel, allCheckedLevels, levelResults, comp.level,
-          narrativeModel, persona_prompt, levelPrompt, general_context,
+          narrativeModel, persona_prompt, levelPrompt, general_context, specificContext,
           reportId, userId, currentJobId
       );
 
@@ -327,8 +329,8 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
 
       const recommendations = await generateRecommendations(
           compName, finalLevel, levelResults,
-          narrativeModel, persona_prompt, devPrompt,
-          reportId, userId, currentJobId
+          narrativeModel, persona_prompt, devPrompt, general_context,
+          specificContext, reportId, userId, currentJobId
       );
 
       // --- 4. SAVE TO DATABASE ---
@@ -415,7 +417,7 @@ function generateDefaultJudgments(lvlObj: any) {
 async function evaluateKeyBehaviors(
     comp: any, level: number, allRelevantEvidence: any[], model: string, persona: string,
     simContextMap: Record<string, string>, instructions: string, projectContext: string,
-    reportId: string, userId: string, jobId: string
+    reportContext: string, reportId: string, userId: string, jobId: string
 ) {
     const lvlObj = comp.level.find((l: any) => String(l.nomor) === String(level));
     if (!lvlObj) return [];
@@ -442,6 +444,9 @@ async function evaluateKeyBehaviors(
     
     **PROJECT CONTEXT:**
     ${projectContext}
+
+    **REPORT SPECIFIC CONTEXT:**
+    ${reportContext || "N/A"}
 
     **SIMULATION METHOD CONTEXTS:**
     ${Object.entries(simContextMap).map(([k, v]) => `[${k}]: ${v}`).join('\n\n')}
@@ -509,7 +514,7 @@ async function determineLevelAndNarrative(
     compName: string, targetLevel: number, levelsChecked: number[], levelResults: any,
     allLevelDefinitions: any[],
     model: string, persona: string, instructions: string, projectContext: string,
-    reportId: string, userId: string, jobId: string
+    reportContext: string, reportId: string, userId: string, jobId: string
 ) {
     let resultsSummary = "";
     for (const lvl of levelsChecked) {
@@ -533,6 +538,9 @@ async function determineLevelAndNarrative(
     
     **PROJECT CONTEXT:**
     ${projectContext}
+
+    **REPORT SPECIFIC CONTEXT:**
+    ${reportContext || "N/A"}
 
     **DICTIONARY LEVELS:**
     ${levelDefs}
@@ -571,8 +579,8 @@ async function determineLevelAndNarrative(
 // TASK 3: DEVELOPMENT RECOMMENDATIONS
 async function generateRecommendations(
     compName: string, finalLevel: number, levelResults: any,
-    model: string, persona: string, instructions: string,
-    reportId: string, userId: string, jobId: string
+    model: string, persona: string, instructions: string, projectContext: string,
+    reportContext: string, reportId: string, userId: string, jobId: string
 ) {
     let gapsText = "";
     for (const [lvl, kbs] of Object.entries(levelResults)) {
@@ -596,6 +604,12 @@ async function generateRecommendations(
     === DATA FOR RECOMMENDATIONS ===
     **COMPETENCY:** ${compName}
     **CURRENT ASSIGNED LEVEL:** ${finalLevel}
+
+    **PROJECT CONTEXT:**
+    ${projectContext}
+
+    **REPORT SPECIFIC CONTEXT:**
+    ${reportContext || "N/A"}
     
     **IDENTIFIED GAPS:**
     ${gapsText}

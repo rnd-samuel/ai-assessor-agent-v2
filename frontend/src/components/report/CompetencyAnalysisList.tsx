@@ -198,7 +198,7 @@ export default function CompetencyAnalysisList({
         )}
 
         {/* Show "Processing..." disabled button if active */}
-        {reportStatus === 'PROCESSING' && (
+        {isProcessing && (
           <button disabled className="bg-bg-medium text-text-muted rounded-md text-sm font-semibold px-4 py-2 cursor-not-allowed opacity-70 flex items-center gap-2">
             <div className="animate-spin h-3 w-3 border-2 border-current border-t-transparent rounded-full"></div>
             AI Working...

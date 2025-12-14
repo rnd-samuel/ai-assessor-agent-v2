@@ -106,15 +106,16 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     }
 
     // 1. Fetch Data
-    const reportRes = await query(`SELECT project_id FROM reports WHERE id = $1`, [reportId]);
+    const reportRes = await query(`SELECT project_id, specific_context FROM reports WHERE id = $1`, [reportId]);
     const projectId = reportRes.rows[0].project_id;
+    const specificContext = reportRes.rows[0].specific_context || "";
 
     const projectRes = await query(
-      `SELECT pp.summary_prompt, pp.summary_critique_prompt, pp.persona_prompt 
+      `SELECT pp.summary_prompt, pp.summary_critique_prompt, pp.persona_prompt, pp.general_context 
        FROM project_prompts pp WHERE pp.project_id = $1`,
       [projectId]
     );
-    const { summary_prompt, summary_critique_prompt, persona_prompt } = projectRes.rows[0];
+    const { summary_prompt, summary_critique_prompt, persona_prompt, general_context } = projectRes.rows[0];
 
     // Fetch Phase 2 Results
     const analysisRes = await query(
@@ -133,6 +134,10 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     const draftPrompt = `
     ${persona_prompt}
     ${summary_prompt || "Summarize the candidate."}
+
+    === CONTEXT ===
+    **Project Context:** ${general_context || "N/A"}
+    **Report Specific Context:** ${specificContext || "N/A"}
 
     === COMPETENCY ANALYSIS DATA ===
     ${analysisText}
@@ -163,6 +168,9 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     const critiquePrompt = `
     ${persona_prompt}
     ${summary_critique_prompt || "Check for conflicts."}
+
+    **Project Context:** ${general_context || "N/A"}
+    **Report Specific Context:** ${specificContext || "N/A"}
 
     === DRAFT CONTENT ===
     Overview: ${draftJson.overview || draftJson.Overview || ""}
