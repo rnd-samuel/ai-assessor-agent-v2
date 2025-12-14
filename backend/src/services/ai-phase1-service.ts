@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { publishEvent } from './redis-publisher';
 import { Job } from 'bullmq';
 import { report } from 'process';
+import { logAIInteraction } from './ai-log-service';
 
 // Initialize OpenAI client (Base configuration)
 const openai = new OpenAI({
@@ -319,17 +320,22 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
               }
             }, 1500);
 
+            const startTime = Date.now();
             let fullResponse = "";
+            let usageData = { prompt_tokens: 0, completion_tokens: 0 };
+
+            const messagesPayload = [
+              { role: "system" as const, content: systemPrompt },
+              { role: "user" as const, content: userPrompt },
+            ];
 
             try {
               const stream = await openai.chat.completions.create({
                 model: model,
-                messages: [
-                  { role: "system", content: systemPrompt },
-                  { role: "user", content: userPrompt },
-                ],
+                messages: messagesPayload,
                 response_format: { type: "json_object" },
                 stream: true,
+                stream_options: { include_usage: true },
                 strict: true,
                 max_tokens: 4000,
                 ...options
@@ -339,6 +345,10 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
               const MAX_SAFE_LENGTH = 15000;
 
               for await (const chunk of stream) {
+                if (chunk.usage) {
+                  usageData = chunk.usage;
+                }
+
                 const content = chunk.choices[0]?.delta?.content || "";
                 if (content) {
                   accumulatedLength += content.length;
@@ -354,8 +364,37 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
 
               clearInterval(checkInterval);
 
+              await logAIInteraction({
+                userId, 
+                reportId, 
+                projectId: report.project_id,
+                action: 'PHASE_1_EXTRACTION',
+                model: model,
+                prompt: JSON.stringify(messagesPayload),
+                response: fullResponse,
+                inputTokens: usageData.prompt_tokens,
+                outputTokens: usageData.completion_tokens,
+                durationMs: Date.now() - startTime,
+                status: 'SUCCESS'
+              });
+
             } catch (err: any) {
               clearInterval(checkInterval);
+
+              if (err.message !== "CANCELLED_BY_USER" && err.name !== 'AbortError') {
+                await logAIInteraction({
+                  userId, 
+                  reportId, 
+                  projectId: report.project_id,
+                  action: 'PHASE_1_EXTRACTION',
+                  model: model,
+                  prompt: JSON.stringify(messagesPayload),
+                  response: fullResponse, // Log whatever we got so far
+                  durationMs: Date.now() - startTime,
+                  status: 'FAILED',
+                  errorMessage: err.message
+                });
+              }
 
               // If it was an abort error, throw the specific cancellation message
               if (err.name === 'AbortError' || err.message === "CANCELLED_BY_USER") {

@@ -22,6 +22,78 @@ const router = Router();
 router.use(authenticateToken, authorizeRole('Admin'));
 
 /**
+ * GET /api/admin/logs
+ * Fetch paginated AI logs
+ */
+router.get('/logs', async (req: AuthenticatedRequest, res) => {
+    const { page = 1, limit = 20, projectId } = req.query;
+    const offset = (Number(page) - 1) * Number(limit);
+    
+    try {
+        let queryStr = `
+            SELECT l.*, u.email as user_email, p.title as project_title 
+            FROM ai_logs l
+            LEFT JOIN users u ON l.user_id = u.id
+            LEFT JOIN projects p ON l.project_id = p.id
+        `;
+        
+        const params: any[] = [Number(limit), offset];
+        let paramCount = 3;
+
+        if (projectId) {
+            queryStr += ` WHERE l.project_id = $${paramCount}`;
+            params.push(projectId);
+        }
+
+        queryStr += ` ORDER BY l.created_at DESC LIMIT $1 OFFSET $2`;
+
+        // Execute count query for pagination
+        const countRes = await query(`SELECT COUNT(*) FROM ai_logs ${projectId ? 'WHERE project_id = $1' : ''}`, projectId ? [projectId] : []);
+        
+        // Execute data query
+        // Note: We need to handle the dynamic parameter index for limit/offset if projectId exists.
+        // Easier way:
+        const finalQuery = `
+            SELECT l.id, l.action, l.model, l.cost_usd, l.duration_ms, l.status, l.created_at, l.input_tokens, l.output_tokens,
+                   u.email as user_email, p.name as project_title,
+                   left(l.prompt_snapshot, 100) as prompt_preview -- optimization
+            FROM ai_logs l
+            LEFT JOIN users u ON l.user_id = u.id
+            LEFT JOIN projects p ON l.project_id = p.id
+            ${projectId ? `WHERE l.project_id = '${projectId}'` : ''}
+            ORDER BY l.created_at DESC 
+            LIMIT ${Number(limit)} OFFSET ${offset}
+        `;
+
+        const logs = await query(finalQuery);
+
+        res.json({
+            data: logs.rows,
+            total: Number(countRes.rows[0].count),
+            page: Number(page)
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to fetch logs" });
+    }
+});
+
+/**
+ * GET /api/admin/logs/:id
+ * Fetch full details (heavy text)
+ */
+router.get('/logs/:id', async (req: AuthenticatedRequest, res) => {
+    try {
+        const result = await query("SELECT * FROM ai_logs WHERE id = $1", [req.params.id]);
+        if (result.rows.length === 0) return res.status(404).send({ message: "Log not found" });
+        res.json(result.rows[0]);
+    } catch (error) {
+        res.status(500).send({ message: "Error fetching log details" });
+    }
+});
+
+/**
  * (ADM-8.2) Get Usage Stats
  * Mocked for now, but structured for the frontend.
  */

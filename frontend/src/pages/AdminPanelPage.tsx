@@ -43,6 +43,33 @@ Chart.defaults.color = '#4b5563'; // text-secondary
 
 type AdminTab = 'usage' | 'queue' | 'logging' | 'knowledge' | 'ai_settings' | 'user_management';
 
+interface LogEntry {
+  id: string;
+  action: string;
+  model: string;
+  cost_usd: string | number;
+  duration_ms: number;
+  status: 'SUCCESS' | 'FAILED';
+  created_at: string;
+  input_tokens: number;
+  output_tokens: number;
+  user_email?: string;
+  project_title?: string;
+  prompt_snapshot?: string;
+  ai_response_snapshot?: string;
+}
+
+// Helper to pretty-print JSON content in logs
+const tryFormatJSON = (str: string | undefined) => {
+  if (!str) return "";
+  try {
+    const obj = JSON.parse(str);
+    return JSON.stringify(obj, null, 2);
+  } catch (e) {
+    return str;
+  }
+};
+
 // Helper to check if model supports temperature
 const supportsTemperature = (model: string) => {
   // Example logic: OpenAI 'o1' models don't support temperature. 
@@ -55,6 +82,13 @@ export default function AdminPanelPage() {
   // (A2) State for active tab
   const [activeTab, setActiveTab] = useState<AdminTab>('usage');
   const addToast = useToastStore((state) => state.addToast);
+
+  // --- NEW: LOGGING STATE ---
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logsPage, setLogsPage] = useState(1);
+  const [totalLogs, setTotalLogs] = useState(0);
+  const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   
   // State for all modals
   const [modals, setModals] = useState({
@@ -253,6 +287,38 @@ export default function AdminPanelPage() {
         .catch(console.error);
     }
   }, [activeTab])
+
+  // --- FETCH LOGS ---
+  const fetchLogs = async (page = 1) => {
+    setIsLoadingLogs(true);
+    try {
+      const response = await apiService.get(`/admin/logs?page=${page}&limit=20`);
+      setLogs(response.data.data);
+      setTotalLogs(response.data.total);
+      setLogsPage(response.data.page);
+    } catch (error) {
+      console.error("Failed to fetch logs:", error);
+      addToast("Failed to load logs.", 'error');
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'logging') {
+      fetchLogs(logsPage);
+    }
+  }, [activeTab, logsPage]);
+
+  const handleViewLogDetails = async (id: string) => {
+    try {
+      const res = await apiService.get(`/admin/logs/${id}`);
+      setSelectedLog(res.data);
+      openModal('logDetails');
+    } catch(e) { 
+      addToast("Failed to fetch log details", 'error'); 
+    }
+  };
 
   // Knowledge Files Tab Fetching
 
@@ -861,40 +927,88 @@ export default function AdminPanelPage() {
             <div className="space-y-6">
               <div className="flex justify-between items-center">
                 <h3 className="text-lg font-semibold text-text-primary">Comprehensive Logging</h3>
-                <button onClick={() => openModal('exportLogs')} className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover flex items-center gap-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  Export Logs
-                </button>
+                <div className="flex gap-2">
+                    <button onClick={() => fetchLogs(logsPage)} className="text-sm text-primary hover:underline">Refresh</button>
+                    <button onClick={() => openModal('exportLogs')} className="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Export Logs
+                    </button>
+                </div>
               </div>
+
               {/* Log Table (A7) */}
               <div className="overflow-x-auto border border-border rounded-lg bg-bg-light shadow-sm">
                 <table className="w-full text-left text-sm">
                   <thead>
-                    <tr className="bg-bg-medium border-b border-border">
-                      <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/30">Timestamp <span className="text-xs">▼</span></th>
-                      <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/30">User</th>
-                      <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/30">Report ID</th>
-                      <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/30">Model Used</th>
-                      <th className="p-3 font-semibold text-text-secondary cursor-pointer hover:bg-border/30">Tokens (In → Out)</th>
+                    <tr className="bg-bg-medium border-b border-border text-xs uppercase text-text-muted">
+                      <th className="p-3 font-semibold">Timestamp</th>
+                      <th className="p-3 font-semibold">Action</th>
+                      <th className="p-3 font-semibold">User / Project</th>
+                      <th className="p-3 font-semibold">Model</th>
+                      <th className="p-3 font-semibold text-right">Cost ($)</th>
+                      <th className="p-3 font-semibold text-center">Status</th>
+                      <th className="p-3 font-semibold"></th>
                     </tr>
                   </thead>
-                  <tbody>
-                    <tr className="border-b border-border hover:bg-bg-medium cursor-pointer" onClick={() => openModal('logDetails')}>
-                      <td className="p-3 whitespace-nowrap">Oct 24, 2025 10:30:15 AM</td>
-                      <td className="p-3">john.doe</td>
-                      <td className="p-3">RPT-001</td>
-                      <td className="p-3">gpt-4</td>
-                      <td className="p-3">1200 → 350</td>
-                    </tr>
-                    <tr className="hover:bg-bg-medium cursor-pointer" onClick={() => openModal('logDetails')}>
-                      <td className="p-3 whitespace-nowrap">Oct 24, 2025 09:15:00 AM</td>
-                      <td className="p-3">jane.smith</td>
-                      <td className="p-3">RPT-002</td>
-                      <td className="p-3">claude-3</td>
-                      <td className="p-3">800 → 200</td>
-                    </tr>
+                  <tbody className="divide-y divide-border">
+                    {isLoadingLogs ? (
+                        <tr><td colSpan={7} className="p-8 text-center text-text-muted">Loading logs...</td></tr>
+                    ) : logs.length === 0 ? (
+                        <tr><td colSpan={7} className="p-8 text-center text-text-muted">No logs found.</td></tr>
+                    ) : (
+                        logs.map((log) => (
+                            <tr key={log.id} className="hover:bg-bg-medium/50 transition-colors">
+                                <td className="p-3 whitespace-nowrap text-text-secondary">
+                                    {new Date(log.created_at).toLocaleString()}
+                                </td>
+                                <td className="p-3 font-medium text-text-primary">{log.action}</td>
+                                <td className="p-3 text-xs">
+                                    <div className="font-medium text-text-primary">{log.user_email || 'System'}</div>
+                                    <div className="text-text-muted truncate max-w-[150px]">{log.project_title || '-'}</div>
+                                </td>
+                                <td className="p-3 text-xs text-text-secondary">{log.model}</td>
+                                <td className="p-3 text-right font-mono text-xs">
+                                    ${Number(log.cost_usd).toFixed(5)}
+                                </td>
+                                <td className="p-3 text-center">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${log.status === 'SUCCESS' ? 'bg-success/10 text-success' : 'bg-error/10 text-error'}`}>
+                                        {log.status}
+                                    </span>
+                                </td>
+                                <td className="p-3 text-right">
+                                    <button 
+                                        onClick={() => handleViewLogDetails(log.id)}
+                                        className="text-xs font-medium text-primary hover:underline"
+                                    >
+                                        Details
+                                    </button>
+                                </td>
+                            </tr>
+                        ))
+                    )}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Pagination Controls */}
+              <div className="flex justify-between items-center text-sm text-text-secondary">
+                  <span>Page {logsPage} (Total: {totalLogs})</span>
+                  <div className="flex gap-2">
+                      <button 
+                        disabled={logsPage === 1}
+                        onClick={() => setLogsPage(p => Math.max(1, p - 1))}
+                        className="px-3 py-1 border border-border rounded hover:bg-bg-medium disabled:opacity-50"
+                      >
+                        Previous
+                      </button>
+                      <button 
+                        disabled={logs.length < 20} // Simple check assuming limit=20
+                        onClick={() => setLogsPage(p => p + 1)}
+                        className="px-3 py-1 border border-border rounded hover:bg-bg-medium disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                  </div>
               </div>
             </div>
           )}
@@ -1454,49 +1568,47 @@ export default function AdminPanelPage() {
       {/* --- MODALS --- */}
 
       {/* Log Details Modal (A9) */}
-      {modals.logDetails && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-40" onClick={() => closeModal('logDetails')}>
-          <div className="w-full max-w-3xl bg-bg-light rounded-lg shadow-lg flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+      {modals.logDetails && selectedLog && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => closeModal('logDetails')}>
+          <div className="w-full max-w-4xl bg-bg-light rounded-lg shadow-lg flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-6 border-b border-border">
-              <h3 className="text-xl font-semibold text-text-primary">Log Entry Details</h3>
+              <h3 className="text-xl font-semibold text-text-primary">Log Details: {selectedLog.action}</h3>
               <button className="text-text-muted hover:text-text-primary" onClick={() => closeModal('logDetails')}>&times;</button>
             </div>
-            <div className="p-6 space-y-4 overflow-y-auto">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mb-4">
-                <div><strong className="text-text-muted">Timestamp:</strong> <span>Oct 24, 10:30:15</span></div>
-                <div><strong className="text-text-muted">User:</strong> <span>john.doe</span></div>
-                <div><strong className="text-text-muted">Report ID:</strong> <span>RPT-001</span></div>
-                <div><strong className="text-text-muted">Model Used:</strong> <span>gpt-4</span></div>
-                <div className="md:col-span-2"><strong className="text-text-muted">Tokens (In → Out):</strong> <span>1200 → 350</span></div>
+            
+            <div className="p-6 space-y-6 overflow-y-auto">
+              {/* Metadata Grid */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm bg-bg-medium/30 p-4 rounded-lg border border-border">
+                <div><span className="block text-xs font-bold text-text-muted uppercase">Date</span> {new Date(selectedLog.created_at).toLocaleString()}</div>
+                <div><span className="block text-xs font-bold text-text-muted uppercase">Status</span> <span className={selectedLog.status === 'SUCCESS' ? 'text-success' : 'text-error'}>{selectedLog.status}</span></div>
+                <div><span className="block text-xs font-bold text-text-muted uppercase">Duration</span> {selectedLog.duration_ms}ms</div>
+                <div><span className="block text-xs font-bold text-text-muted uppercase">Cost</span> ${Number(selectedLog.cost_usd).toFixed(6)}</div>
+                
+                <div className="col-span-2"><span className="block text-xs font-bold text-text-muted uppercase">Model</span> {selectedLog.model}</div>
+                <div className="col-span-2"><span className="block text-xs font-bold text-text-muted uppercase">Tokens</span> {selectedLog.input_tokens} In / {selectedLog.output_tokens} Out</div>
               </div>
-              <h4 className="text-md font-semibold text-text-primary border-t border-border pt-4">AI Interactions</h4>
-              <div className="overflow-x-auto border border-border rounded-lg">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="bg-bg-medium border-b border-border">
-                      <th className="p-2 font-semibold text-text-secondary w-1/3">Prompt</th>
-                      <th className="p-2 font-semibold text-text-secondary w-1/3">Output</th>
-                      <th className="p-2 font-semibold text-text-secondary w-1/3">Edited Text</th>
-                      <th className="p-2 font-semibold text-text-secondary">Tokens</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b border-border align-top">
-                      <td className="p-2"><div className="max-h-24 overflow-y-auto">[Initial prompt...]</div></td>
-                      <td className="p-2"><div className="max-h-24 overflow-y-auto">[Generated evidence...]</div></td>
-                      <td className="p-2">-</td>
-                      <td className="p-2">800 → 200</td>
-                    </tr>
-                    <tr className="align-top">
-                      <td className="p-2"><div className="max-h-24 overflow-y-auto">Refine: Make concise.</div></td>
-                      <td className="p-2"><div className="max-h-24 overflow-y-auto">[Refined reasoning...]</div></td>
-                      <td className="p-2"><div className="max-h-24 overflow-y-auto">[Manual user edit...]</div></td>
-                      <td className="p-2">50 → 30</td>
-                    </tr>
-                  </tbody>
-                </table>
+
+              {/* Prompt Snapshot */}
+              <div>
+                <h4 className="text-sm font-bold text-text-primary mb-2">Prompt (Input)</h4>
+                <div className="bg-bg-medium p-4 rounded-lg border border-border overflow-x-auto">
+                    <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap">
+                        {tryFormatJSON(selectedLog.prompt_snapshot)}
+                    </pre>
+                </div>
+              </div>
+
+              {/* Response Snapshot */}
+              <div>
+                <h4 className="text-sm font-bold text-text-primary mb-2">AI Response (Output)</h4>
+                <div className="bg-bg-medium p-4 rounded-lg border border-border overflow-x-auto">
+                    <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap">
+                        {tryFormatJSON(selectedLog.ai_response_snapshot)}
+                    </pre>
+                </div>
               </div>
             </div>
+
             <div className="p-4 bg-bg-medium border-t border-border flex justify-end">
               <button className="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2" onClick={() => closeModal('logDetails')}>Close</button>
             </div>

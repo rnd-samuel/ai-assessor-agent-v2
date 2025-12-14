@@ -4,6 +4,7 @@ import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { publishEvent } from './redis-publisher';
 import { Job } from 'bullmq';
+import { logAIInteraction } from './ai-log-service';
 
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
@@ -39,8 +40,17 @@ async function checkCancellation(reportId: string, userId: string, currentJobId?
 }
 
 // --- HELPER: Smart Request ---
-async function smartAIRequest(payload: any, reportId: string, userId: string, jobId: string) {
+async function smartAIRequest(
+  payload: any, 
+  reportId: string, 
+  userId: string, 
+  jobId: string,
+  projectId: string,
+  actionName: string
+) {
+  const startTime = Date.now();
   const controller = new AbortController();
+
   const poller = setInterval(async () => {
     try { await checkCancellation(reportId, userId, jobId); } 
     catch (e) { controller.abort(); clearInterval(poller); }
@@ -49,8 +59,33 @@ async function smartAIRequest(payload: any, reportId: string, userId: string, jo
   try {
     const response = await openai.chat.completions.create({ ...payload }, { signal: controller.signal });
     clearInterval(poller);
+
+    // Log Success
+    const usage = response.usage || { prompt_tokens: 0, completion_tokens: 0 };
+    await logAIInteraction({
+      userId, reportId, projectId,
+      action: actionName,
+      model: payload.model,
+      prompt: JSON.stringify(payload.messages),
+      response: response.choices[0].message.content || "",
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      durationMs: Date.now() - startTime,
+      status: 'SUCCESS'
+    });
     return response;
   } catch (error: any) {
+    // LOG FAILURE
+    await logAIInteraction({
+      userId, reportId, projectId,
+      action: actionName,
+      model: payload.model,
+      prompt: JSON.stringify(payload.messages),
+      response: "",
+      durationMs: Date.now() - startTime,
+      status: 'FAILED',
+      errorMessage: error.message
+    });
     clearInterval(poller);
     if (error.name === 'AbortError') throw new Error("CANCELLED_BY_USER");
     throw error;
@@ -157,7 +192,7 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
         messages: [{ role: "user", content: draftPrompt }],
         response_format: { type: "json_object" },
         temperature: temperature
-    }, reportId, userId, currentJobId);
+    }, reportId, userId, currentJobId, projectId, 'PHASE_3_DRAFT');
 
     const draftContent = draftRes.choices[0].message.content || "{}";
     const draftJson = JSON.parse(cleanJsonOutput(draftContent));
@@ -198,7 +233,7 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
         messages: [{ role: "user", content: critiquePrompt }],
         response_format: { type: "json_object" },
         temperature: isBackupTry ? temperature : 0.4
-    }, reportId, userId, currentJobId);
+    }, reportId, userId, currentJobId, projectId, 'PHASE_3_CRITIQUE');
 
     const finalContent = finalRes.choices[0].message.content || "{}";
 

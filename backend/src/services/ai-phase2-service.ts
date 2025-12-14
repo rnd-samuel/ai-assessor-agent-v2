@@ -4,6 +4,7 @@ import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { publishEvent } from './redis-publisher';
 import { Job } from 'bullmq';
+import { logAIInteraction } from './ai-log-service';
 
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
@@ -42,10 +43,12 @@ async function smartAIRequest(
   payload: any, 
   reportId: string, 
   userId: string, 
-  jobId: string
+  jobId: string,
+  projectId: string,
+  actionName: string
 ) {
+  const startTime = Date.now();
   const controller = new AbortController();
-  const signal = controller.signal;
 
   // Heartbeat: Check DB every 1.5s
   const poller = setInterval(async () => {
@@ -59,10 +62,37 @@ async function smartAIRequest(
   }, 1500);
 
   try {
-    const response = await openai.chat.completions.create({ ...payload }, { signal });
+    const response = await openai.chat.completions.create({ ...payload }, { signal: controller.signal });
     clearInterval(poller);
+
+    // Log Success
+    const usage = response.usage || { prompt_tokens: 0, completion_tokens: 0 };
+    await logAIInteraction({
+      userId, reportId, projectId,
+      action: actionName,
+      model: payload.model,
+      prompt: JSON.stringify(payload.messages),
+      response: response.choices[0].message.content || "",
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      durationMs: Date.now() - startTime,
+      status: 'SUCCESS'
+    });
+
     return response;
   } catch (error: any) {
+    // Log Failure
+    await logAIInteraction({
+      userId, reportId, projectId,
+      action: actionName,
+      model: payload.model,
+      prompt: JSON.stringify(payload.messages),
+      response: "",
+      durationMs: Date.now() - startTime,
+      status: 'FAILED',
+      errorMessage: error.message
+    });
+
     clearInterval(poller);
     if (error.name === 'AbortError') {
       throw new Error("CANCELLED_BY_USER");
@@ -144,6 +174,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
     const reportRes = await query('SELECT project_id, target_levels, specific_context FROM reports WHERE id = $1', [reportId]);
     const report = reportRes.rows[0];
     const targetLevels = report.target_levels || {};
+    const projectId = report.project_id;
     const specificContext = report.specific_context || "";
 
     const projectRes = await query(
@@ -253,7 +284,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
             comp, levelNum, relevantEvidence, judgmentModel, 
             persona_prompt, simContextMap, kbPrompt,
             general_context, specificContext,
-            reportId, userId, currentJobId
+            reportId, userId, currentJobId, projectId
          );
          levelResults[levelNum] = judgments;
       }
@@ -274,7 +305,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           const judgments = await evaluateKeyBehaviors(
             comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
             simContextMap, kbPrompt, general_context, specificContext,
-            reportId, userId, currentJobId
+            reportId, userId, currentJobId, projectId
           );
           levelResults[nextLevel] = judgments;
           currentHigh = nextLevel;
@@ -303,7 +334,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           const judgments = await evaluateKeyBehaviors(
             comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
             simContextMap, kbPrompt, general_context, specificContext,
-            reportId, userId, currentJobId
+            reportId, userId, currentJobId, projectId
           );
           levelResults[nextLevel] = judgments;
           currentLow = nextLevel
@@ -321,7 +352,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       const { finalLevel, explanation } = await determineLevelAndNarrative(
           compName, targetLevel, allCheckedLevels, levelResults, comp.level,
           narrativeModel, persona_prompt, levelPrompt, general_context, specificContext,
-          reportId, userId, currentJobId
+          reportId, userId, currentJobId, projectId
       );
 
       // --- STEP 3: DEVELOPMENT RECOMMENDATIONS ---
@@ -330,7 +361,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       const recommendations = await generateRecommendations(
           compName, finalLevel, levelResults,
           narrativeModel, persona_prompt, devPrompt, general_context,
-          specificContext, reportId, userId, currentJobId
+          specificContext, reportId, userId, currentJobId, projectId
       );
 
       // --- 4. SAVE TO DATABASE ---
@@ -417,7 +448,7 @@ function generateDefaultJudgments(lvlObj: any) {
 async function evaluateKeyBehaviors(
     comp: any, level: number, allRelevantEvidence: any[], model: string, persona: string,
     simContextMap: Record<string, string>, instructions: string, projectContext: string,
-    reportContext: string, reportId: string, userId: string, jobId: string
+    reportContext: string, reportId: string, userId: string, jobId: string, projectId: string
 ) {
     const lvlObj = comp.level.find((l: any) => String(l.nomor) === String(level));
     if (!lvlObj) return [];
@@ -478,7 +509,7 @@ async function evaluateKeyBehaviors(
             response_format: { type: "json_object" },
             temperature: 0.2 
         },
-        reportId, userId, jobId
+        reportId, userId, jobId, projectId, 'PHASE_2_JUDGMENT'
     );
 
     const rawContent = response.choices[0].message.content || "{}";
@@ -514,7 +545,7 @@ async function determineLevelAndNarrative(
     compName: string, targetLevel: number, levelsChecked: number[], levelResults: any,
     allLevelDefinitions: any[],
     model: string, persona: string, instructions: string, projectContext: string,
-    reportContext: string, reportId: string, userId: string, jobId: string
+    reportContext: string, reportId: string, userId: string, jobId: string, projectId: string
 ) {
     let resultsSummary = "";
     for (const lvl of levelsChecked) {
@@ -563,7 +594,7 @@ async function determineLevelAndNarrative(
             response_format: { type: "json_object" },
             temperature: 0.5
         },
-        reportId, userId, jobId
+        reportId, userId, jobId, projectId, 'PHASE_2_NARRATIVE'
     );
 
     const raw = response.choices[0].message.content || "{}";
@@ -580,7 +611,7 @@ async function determineLevelAndNarrative(
 async function generateRecommendations(
     compName: string, finalLevel: number, levelResults: any,
     model: string, persona: string, instructions: string, projectContext: string,
-    reportContext: string, reportId: string, userId: string, jobId: string
+    reportContext: string, reportId: string, userId: string, jobId: string, projectId: string
 ) {
     let gapsText = "";
     for (const [lvl, kbs] of Object.entries(levelResults)) {
@@ -630,7 +661,7 @@ async function generateRecommendations(
             response_format: { type: "json_object" },
             temperature: 0.7 
         },
-        reportId, userId, jobId
+        reportId, userId, jobId, projectId, 'PHASE_2_RECOMMENDATIONS'
     );
 
     const raw = response.choices[0].message.content || "{}";
