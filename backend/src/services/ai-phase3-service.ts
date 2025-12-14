@@ -67,9 +67,25 @@ const SummarySchema = z.object({
 
 export async function runPhase3Generation(reportId: string, userId: string, job: Job) {
   const currentJobId = job.id || "unknown";
-  console.log(`[Worker] Starting Phase 3 (Executive Summary) for Report: ${reportId}`);
   
-  await publishEvent(userId, 'ai-stream', { reportId, chunk: "\n🚀 Starting Executive Summary Generation...\n" });
+  // Retry Logic Setup
+  const attemptsMade = job.attemptsMade;
+  const isBackupTry = attemptsMade >= 3;
+  const providerLabel = isBackupTry ? "Backup LLM" : "Main LLM";
+
+  console.log(`[Worker] Starting Phase 3 (Executive Summary). Attempt ${attemptsMade + 1}/6 using ${providerLabel}.`);
+  
+  await publishEvent(userId, 'ai-stream', { 
+    reportId, 
+    chunk: `\n🚀 Starting Executive Summary Generation (Attempt ${attemptsMade + 1}/6 using ${providerLabel})...\n`
+  });
+
+  if (isBackupTry && attemptsMade === 3) {
+    await publishEvent(userId, 'ai-stream', { 
+      reportId, 
+      chunk: `⚠️ Main LLM failed 3 times. Switching to Backup LLM...\n` 
+    });
+  }
 
   const client = await pool.connect();
 
@@ -77,7 +93,17 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     const settingsRes = await query("SELECT value FROM system_settings WHERE key = 'ai_config'");
     const aiConfig = settingsRes.rows[0]?.value || {};
 
-    const narrativeModel = aiConfig.narrativeLLM || "google/gemini-2.5-pro";
+    // Model Selection Logic
+    let narrativeModel, temperature;
+
+    if (isBackupTry) {
+      narrativeModel = aiConfig.backupLLM || "google/gemini-2.5-flash-lite-preview-09-2025";
+      temperature = aiConfig.backupTemp ?? 0.5;
+    } else {
+      narrativeModel = aiConfig.narrativeLLM || "google/gemini-2.5-pro";
+      // Use a slightly lower temp for the critic/editor role if desired, or standard
+      temperature = 0.5; 
+    }
 
     // 1. Fetch Data
     const reportRes = await query(`SELECT project_id FROM reports WHERE id = $1`, [reportId]);
@@ -125,7 +151,7 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
         model: narrativeModel, // High reasoning for synthesis
         messages: [{ role: "user", content: draftPrompt }],
         response_format: { type: "json_object" },
-        temperature: 0.7
+        temperature: temperature
     }, reportId, userId, currentJobId);
 
     const draftContent = draftRes.choices[0].message.content || "{}";
@@ -163,12 +189,10 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
         model: narrativeModel,
         messages: [{ role: "user", content: critiquePrompt }],
         response_format: { type: "json_object" },
-        temperature: 0.4
+        temperature: isBackupTry ? temperature : 0.4
     }, reportId, userId, currentJobId);
 
     const finalContent = finalRes.choices[0].message.content || "{}";
-
-    console.log("[Phase 3] Raw Critic Output:", finalContent);
 
     let finalJson;
     try {

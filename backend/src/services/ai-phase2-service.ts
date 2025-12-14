@@ -101,12 +101,25 @@ const RecommendationsSchema = z.object({
 
 export async function runPhase2Generation(reportId: string, userId: string, job: Job) {
   const currentJobId = job.id || "unknown";
-  console.log(`[Worker] Starting Senior Assessor Phase 2 for Report: ${reportId}`);
+
+  // Retry Logic Setup
+  const attemptsMade = job.attemptsMade;
+  const isBackupTry = attemptsMade >= 3;
+  const providerLabel = isBackupTry ? "Backup LLM" : "Main LLM";
+
+  console.log(`[Worker] Starting Senior Assessor Phase 2. Attempt ${attemptsMade + 1}/6 using ${providerLabel}.`);
   
   await publishEvent(userId, 'ai-stream', { 
       reportId, 
-      chunk: "🧠 Initializing Senior Assessor Pipeline...\n" 
+      chunk: `🧠 Initializing Senior Assessor Pipeline (Attempt ${attemptsMade + 1}/6 using ${providerLabel})...\n`
   });
+
+  if (isBackupTry && attemptsMade === 3) {
+    await publishEvent(userId, 'ai-stream', { 
+      reportId, 
+      chunk: `⚠️ Main LLM failed 3 times. Switching to Backup LLM...\n` 
+    });
+  }
 
   const client = await pool.connect();
 
@@ -114,9 +127,19 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
     // --- 1. FETCH CONFIG & CONTEXT ---
     const settingsRes = await query("SELECT value FROM system_settings WHERE key = 'ai_config'");
     const aiConfig = settingsRes.rows[0]?.value || {};
-    
-    const judgmentModel = aiConfig.judgmentLLM || "google/gemini-2.5-flash-lite-preview-09-2025";
-    const narrativeModel = aiConfig.narrativeLLM || "google/gemini-2.5-pro";
+
+    // Model Selection Logic
+    let judgmentModel, narrativeModel, temperature;
+    if (isBackupTry) {
+      const backup = aiConfig.backupLLM || "google/gemini-2.5-flash-lite-preview-09-2025";
+      judgmentModel = backup;
+      narrativeModel = backup;
+      temperature = aiConfig.backupTemp ?? 0.5;
+    } else {
+      judgmentModel = aiConfig.judgmentLLM || "google/gemini-2.5-flash-lite-preview-09-2025";
+      narrativeModel = aiConfig.narrativeLLM || "google/gemini-2.5-pro";
+      temperature = aiConfig.judgmentTemp ?? 0.2;
+    }
 
     const reportRes = await query('SELECT project_id, target_levels FROM reports WHERE id = $1', [reportId]);
     const report = reportRes.rows[0];
