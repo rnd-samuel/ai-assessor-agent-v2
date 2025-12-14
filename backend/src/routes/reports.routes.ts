@@ -846,6 +846,7 @@ router.put('/:id/content', authenticateToken, async (req: AuthenticatedRequest, 
     if (executiveSummary) {
       const check = await query('SELECT id FROM executive_summary WHERE report_id = $1', [reportId]);
       const hasContent = 
+        (executiveSummary.overview && executiveSummary.overview.trim().length > 0) ||
         (executiveSummary.strengths && executiveSummary.strengths.trim().length > 0) || 
         (executiveSummary.areas_for_improvement && executiveSummary.areas_for_improvement.trim().length > 0) || 
         (executiveSummary.recommendations && executiveSummary.recommendations.trim().length > 0);
@@ -853,15 +854,15 @@ router.put('/:id/content', authenticateToken, async (req: AuthenticatedRequest, 
       if (check.rows.length > 0) {
         await query(
           `UPDATE executive_summary 
-           SET strengths = $1, areas_for_improvement = $2, recommendations = $3, updated_at = NOW()
-           WHERE report_id = $4`,
-          [executiveSummary.strengths, executiveSummary.areas_for_improvement, executiveSummary.recommendations, reportId]
+           SET overview = $1, strengths = $2, areas_for_improvement = $3, recommendations = $4, updated_at = NOW()
+           WHERE report_id = $5`,
+          [executiveSummary.overview, executiveSummary.strengths, executiveSummary.areas_for_improvement, executiveSummary.recommendations, reportId]
         );
       } else if (hasContent) {
          await query(
-          `INSERT INTO executive_summary (report_id, strengths, areas_for_improvement, recommendations)
-           VALUES ($1, $2, $3, $4)`,
-          [reportId, executiveSummary.strengths, executiveSummary.areas_for_improvement, executiveSummary.recommendations]
+          `INSERT INTO executive_summary (report_id, overview, strengths, areas_for_improvement, recommendations)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [reportId, executiveSummary.overview, executiveSummary.strengths, executiveSummary.areas_for_improvement, executiveSummary.recommendations]
         );
       }
     }

@@ -1,8 +1,10 @@
 // frontend/src/components/report/ExecutiveSummary.tsx
 import { useRef, useLayoutEffect } from 'react';
+import LoadingButton from '../LoadingButton';
 
 export interface SummaryData {
   id: string;
+  overview: string;
   strengths: string;
   areas_for_improvement: string;
   recommendations: string;
@@ -12,10 +14,12 @@ interface ExecutiveSummaryProps {
   reportId: string;
   isViewOnly: boolean;
   onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
-  
-  // --- New Props ---
   data: SummaryData | null;
   onChange: (newData: SummaryData) => void;
+  reportStatus: 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  onGenerate: () => void;
+  onReset: () => void;
+  isGenerating: boolean;
 }
 
 const AutoTextarea = (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => {
@@ -36,115 +40,149 @@ export default function ExecutiveSummary({
   isViewOnly,
   onAskAI,
   data,
-  onChange
+  onChange,
+  reportStatus,
+  onGenerate,
+  onReset,
+  isGenerating
 }: ExecutiveSummaryProps) {
   
-  const isEmpty = !data || (!data.strengths && !data.areas_for_improvement && !data.recommendations);
+  // Is empty if no data OR if we are currently processing (show loader instead of empty fields)
+  const showLoader = reportStatus === 'PROCESSING' || isGenerating;
+  const hasData = data && (data.overview || data.strengths);
 
   // Handle Local Updates
   const handleChange = (field: keyof SummaryData, value: string) => {
     if (!data) return;
     const newData = { ...data, [field]: value };
-    onChange(newData); // Update parent state
+    onChange(newData);
   };
 
-  if (isEmpty) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[300px] text-center border-2 border-dashed border-border rounded-lg m-6 bg-bg-light/50">
-        <div className="space-y-3">
-          <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto"></div>
-          <p className="text-text-primary font-medium">Generating Summary...</p>
-          <p className="text-xs text-text-muted">This may take a moment.</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
+return (
     <div className="flex flex-col h-full overflow-y-auto p-6 space-y-6 bg-bg-medium/50">
       <div className="flex justify-between items-center">
         <h3 className="text-lg font-semibold text-text-primary">Executive Summary</h3>
-      </div>
-
-      {/* 1. Strengths */}
-      <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
-        <div className="flex justify-between items-center mb-2">
-          <label className="text-base font-semibold text-text-primary">Strengths</label>
-          {!isViewOnly && (
-            <button
-              onClick={() => onAskAI(
-                'Refine Strengths Section',
-                data.strengths,
-                (newText) => handleChange('strengths', newText)
+        
+        {/* Controls */}
+        <div className="flex gap-2">
+            {reportStatus === 'FAILED' && !isViewOnly && (
+                <button onClick={onGenerate} className="text-xs text-primary hover:underline font-medium">
+                    Retry Generation
+                </button>
             )}
-              className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
-              title="Ask AI to refine"
-            >
-               {/* Icon... */}
-               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
-            </button>
-          )}
+            {reportStatus === 'PROCESSING' && (
+                <button onClick={onReset} className="text-xs text-error hover:underline font-medium">
+                    Stop Generation
+                </button>
+            )}
         </div>
-        <AutoTextarea
-          rows={4}
-          className="w-full rounded-md border border-border p-3 bg-white shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
-          value={data.strengths}
-          disabled={isViewOnly}
-          onChange={(e) => handleChange('strengths', e.target.value)}
-        />
       </div>
 
-      {/* 2. Areas for Improvement */}
-      <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
-        <div className="flex justify-between items-center mb-2">
-          <label className="text-base font-semibold text-text-primary">Areas for Improvement</label>
-          {!isViewOnly && (
-            <button
-              onClick={() => onAskAI(
-                'Refine Improvements Section',
-                data.areas_for_improvement,
-                (newText) => handleChange('areas_for_improvement', newText)
-              )}
-              className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
-            >
-               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
-            </button>
-          )}
+      {showLoader ? (
+        <div className="flex flex-col items-center justify-center h-64 text-center border-2 border-dashed border-border rounded-lg bg-bg-light/50">
+           <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mb-3"></div>
+           <p className="text-text-primary font-medium">AI is writing the summary...</p>
+           <p className="text-xs text-text-muted">Drafting narrative: Checking for conflicts</p>
         </div>
-        <AutoTextarea
-          rows={4}
-          className="w-full rounded-md border border-border p-3 bg-white shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
-          value={data.areas_for_improvement}
-          disabled={isViewOnly}
-          onChange={(e) => handleChange('areas_for_improvement', e.target.value)}
-        />
-      </div>
+      ) : !hasData ? (
+         <div className="flex flex-col items-center justify-center h-64 text-center border-2 border-dashed border-border rounded-lg bg-bg-light/50">
+            <p className="text-text-muted">No summary generated yet.</p>
+            {!isViewOnly && (
+                <LoadingButton onClick={onGenerate} className="mt-4">Generate Summary</LoadingButton>
+            )}
+         </div>
+      ) : (
+        <>
+          {/* 0. Summary / Overview (New) */}
+          <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
+            <div className="flex justify-between items-center mb-2">
+              <label className="text-base font-semibold text-text-primary">Summary Narrative</label>
+              {!isViewOnly && (
+                <button
+                  onClick={() => onAskAI('Refine Narrative', data?.overview || '', (t) => handleChange('overview', t))}
+                  className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
+                >
+                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                </button>
+              )}
+            </div>
+            <AutoTextarea
+              rows={4}
+              className="w-full rounded-md border border-border p-3 bg-white shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
+              value={data?.overview || ''}
+              disabled={isViewOnly}
+              onChange={(e) => handleChange('overview', e.target.value)}
+              placeholder="The assessee is eager to learn..."
+            />
+          </div>
 
-      {/* 3. Recommendations */}
-      <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
-        <div className="flex justify-between items-center mb-2">
-          <label className="text-base font-semibold text-text-primary">Development Recommendations</label>
-          {!isViewOnly && (
-            <button
-              onClick={() => onAskAI(
-                'Refine Recommendations Section',
-                data.recommendations,
-                (newText) => handleChange('recommendations', newText)
+          {/* 1. Strengths */}
+          <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
+            <div className="flex justify-between items-center mb-2">
+              <label className="text-base font-semibold text-text-primary">Overall Strengths</label>
+              {!isViewOnly && (
+                <button
+                  onClick={() => onAskAI('Refine Strengths', data?.strengths || '', (t) => handleChange('strengths', t))}
+                  className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
+                >
+                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                </button>
               )}
-              className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
-            >
-               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
-            </button>
-          )}
-        </div>
-        <AutoTextarea
-          rows={4}
-          className="w-full rounded-md border border-border p-3 bg-white shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
-          value={data.recommendations}
-          disabled={isViewOnly}
-          onChange={(e) => handleChange('recommendations', e.target.value)}
-        />
-      </div>
+            </div>
+            <AutoTextarea
+              rows={4}
+              className="w-full rounded-md border border-border p-3 bg-white shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
+              value={data?.strengths || ''}
+              disabled={isViewOnly}
+              onChange={(e) => handleChange('strengths', e.target.value)}
+            />
+          </div>
+
+          {/* 2. Weaknesses */}
+          <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
+            <div className="flex justify-between items-center mb-2">
+              <label className="text-base font-semibold text-text-primary">Overall Weaknesses</label>
+              {!isViewOnly && (
+                <button
+                  onClick={() => onAskAI('Refine Weaknesses', data?.areas_for_improvement || '', (t) => handleChange('areas_for_improvement', t))}
+                  className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
+                >
+                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                </button>
+              )}
+            </div>
+            <AutoTextarea
+              rows={4}
+              className="w-full rounded-md border border-border p-3 bg-white shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
+              value={data?.areas_for_improvement || ''}
+              disabled={isViewOnly}
+              onChange={(e) => handleChange('areas_for_improvement', e.target.value)}
+            />
+          </div>
+
+          {/* 3. Recommendations */}
+          <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
+            <div className="flex justify-between items-center mb-2">
+              <label className="text-base font-semibold text-text-primary">Overall Recommendations</label>
+              {!isViewOnly && (
+                <button
+                  onClick={() => onAskAI('Refine Recommendations', data?.recommendations || '', (t) => handleChange('recommendations', t))}
+                  className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
+                >
+                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                </button>
+              )}
+            </div>
+            <AutoTextarea
+              rows={4}
+              className="w-full rounded-md border border-border p-3 bg-white shadow-sm text-sm resize-y focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none disabled:bg-bg-medium"
+              value={data?.recommendations || ''}
+              disabled={isViewOnly}
+              onChange={(e) => handleChange('recommendations', e.target.value)}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

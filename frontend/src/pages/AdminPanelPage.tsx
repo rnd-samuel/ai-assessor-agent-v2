@@ -154,7 +154,7 @@ export default function AdminPanelPage() {
     askAiLLM: 'openrouter/google/gemini-2.5-flash',
   });
 
-  // UPDATED: Default Prompts State
+  // Default Prompts State
   const [defaultPrompts, setDefaultPrompts] = useState({
     persona: '',
     evidence: '',
@@ -163,6 +163,7 @@ export default function AdminPanelPage() {
     competency_level: '',
     development: '',
     summary: '',
+    summary_critique: '',
     askAiSystem: ''
   });
 
@@ -1257,12 +1258,12 @@ export default function AdminPanelPage() {
                 <div className="space-y-6">
                     <div>
                       <div className="flex justify-between items-center mb-1">
-                        <label className="block text-sm font-medium text-text-secondary">Persona (System Prompt)</label>
+                        <label className="text-sm font-semibold mb-1 block">Persona (System Prompt)</label>
                         <button onClick={() => openModal('promptHistory')} className="text-xs font-medium text-primary hover:underline">View History</button>
                       </div>
                       <textarea 
                         rows={3} 
-                        className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+                        className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
                         value={defaultPrompts.persona}
                         onChange={(e) => {
                             setDefaultPrompts({ ...defaultPrompts, persona: e.target.value });
@@ -1271,10 +1272,10 @@ export default function AdminPanelPage() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-text-secondary mb-1">Evidence Collection Prompt</label>
+                      <label className="text-sm font-semibold mb-1 block">Phase 1: Evidence Collection</label>
                       <textarea 
                         rows={4} 
-                        className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
+                        className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
                         value={defaultPrompts.evidence}
                         onChange={(e) => {
                             setDefaultPrompts({ ...defaultPrompts, evidence: e.target.value });
@@ -1324,17 +1325,34 @@ export default function AdminPanelPage() {
                         />
                       </div>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-text-secondary mb-1">Executive Summary Prompt</label>
-                      <textarea 
-                        rows={4} 
-                        className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none"
-                        value={defaultPrompts.summary}
-                        onChange={(e) => {
-                            setDefaultPrompts({ ...defaultPrompts, summary: e.target.value });
+                    <div className="p-4 bg-bg-medium/30 rounded-lg border border-border space-y-4">
+                      <h4 className="text-sm font-bold text-text-primary uppercase tracking-wide">Phase 3: Executive Summary</h4>
+                      <div>
+                        <label className="block text-sm font-medium text-text-secondary mb-1">Task 1: Summary Generation</label>
+                        <p className="text-xs text-text-muted mb-2">Instructs AI to generate summary from phase 2 content.</p>
+                        <textarea 
+                          rows={4} 
+                          className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none font-mono"
+                          value={defaultPrompts.summary}
+                          onChange={(e) => {
+                              setDefaultPrompts({ ...defaultPrompts, summary: e.target.value });
+                              setIsDirty(true);
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-text-secondary mb-1">Task 2: Critique & Refine Prompt</label>
+                        <p className="text-xs text-text-muted mb-2">Agent will check for conflicts and narrative flow.</p>
+                        <textarea
+                          rows={4}
+                          className="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none font-mono"
+                          value={defaultPrompts.summary_critique}
+                          onChange={(e) => {
+                            setDefaultPrompts({ ...defaultPrompts, summary_critique: e.target.value });
                             setIsDirty(true);
-                        }}
-                      />
+                          }}
+                        />
+                      </div>
                     </div>
                 </div>
 

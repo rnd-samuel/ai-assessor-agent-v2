@@ -467,3 +467,20 @@ VALUES (
 )
 ON CONFLICT (key) DO UPDATE 
 SET value = EXCLUDED.value, updated_at = NOW();
+
+-- Add the 'overview' column for the narrative summary
+ALTER TABLE executive_summary 
+ADD COLUMN IF NOT EXISTS overview TEXT;
+
+-- Add the 'summary_critique_prompt' for the evaluator agent
+ALTER TABLE project_prompts 
+ADD COLUMN IF NOT EXISTS summary_critique_prompt TEXT;
+
+-- Update default prompts to include the default critique instructions
+UPDATE system_settings
+SET value = jsonb_set(
+  value,
+  '{summary_critique}',
+  '"**TASK: CRITIQUE & REFINE**\n\nYou are a Senior Editor. Review the drafted Executive Summary for consistency and flow.\n\n**CRITERIA:**\n1. **No Contradictions:** Ensure Strengths do not contradict Weaknesses.\n2. **Narrative Flow:** The *Summary* section must weave traits together into a story, not just list them.\n3. **Tone:** Professional, objective, psychological.\n\nIf the draft is good, return it as is. If issues are found, rewrite the sections to fix them."'
+)
+WHERE key = 'default_prompts';

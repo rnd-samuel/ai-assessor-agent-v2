@@ -28,7 +28,8 @@ app.use(cors({
   origin: true, // Allow all origins (or set to ["http://localhost:5173"] for stricter security)
   exposedHeaders: ['Content-Disposition']
 }));
-app.use(express.json()); // Enable parsing of JSON request bodies
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // --- 2. Create HTTP & WebSocket Servers ---
 // We create an HTTP server from our Express app

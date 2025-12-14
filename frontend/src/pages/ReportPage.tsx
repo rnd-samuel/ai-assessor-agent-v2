@@ -394,6 +394,7 @@ export default function ReportPage() {
       const rawSummary = response.data.executiveSummary || {};
       setSummaryData({
         id: rawSummary.id || '',
+        overview: rawSummary.overview || '',
         strengths: rawSummary.strengths || '',
         areas_for_improvement: rawSummary.areas_for_improvement || '',
         recommendations: rawSummary.recommendations || ''
@@ -1112,6 +1113,10 @@ const blocker = useBlocker(
                           setSummaryData(newData);
                           setIsDirty(true);
                         }}
+                        reportStatus={reportData?.status || 'CREATED'}
+                        onGenerate={handleGeneratePhase3}
+                        onReset={handleReset}
+                        isGenerating={reportData?.status === 'PROCESSING'}
                     />
                 )}
             </div>

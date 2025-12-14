@@ -76,14 +76,18 @@ export default function NewProjectPage() {
   const [prompts, setPrompts] = useState({
     general_context: '',
     persona_prompt: '[Default persona prompt...]',
+
+    // Phase 1 Prompt
     evidence_prompt: '[Default evidence prompt...]',
     
-    // New Phase 2 Prompts
+    // Phase 2 Prompts
     kb_fulfillment_prompt: '',
     competency_level_prompt: '',
     development_prompt: '',
     
-    summary_prompt: '[Default summary prompt...]'
+    // Phase 3 Prompts
+    summary_prompt: '[Default summary prompt...]',
+    summary_critique_prompt: '',
   });
 
   const [dictionarySearch, setDictionarySearch] = useState('');
@@ -165,7 +169,8 @@ export default function NewProjectPage() {
                 competency_level_prompt: defaults.competency_level || prev.competency_level_prompt,
                 development_prompt: defaults.development || prev.development_prompt,
                 
-                summary_prompt: defaults.summary || prev.summary_prompt
+                summary_prompt: defaults.summary || prev.summary_prompt,
+                summary_critique_prompt: defaults.summary_critique || prev.summary_critique_prompt,
             }));
         }
       } catch (error) { 
@@ -678,25 +683,25 @@ return (
                   <textarea 
                     rows={3} 
                     placeholder="Enter general context for this project..." 
-                    className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none" 
+                    className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
                     value={prompts.general_context} 
                     onChange={(e) => setPrompts(p => ({...p, general_context: e.target.value}))} 
                     />
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1 block">Persona (System Prompt)</label>
+                  <label className="text-sm font-semibold text-text-secondary mb-1 block">Persona (System Prompt)</label>
                   <textarea
                    rows={5} 
-                   className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none" 
+                   className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
                    value={prompts.persona_prompt} 
                    onChange={(e) => setPrompts(p => ({...p, persona_prompt: e.target.value}))} 
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1 block">Evidence Collection (Phase 1)</label>
+                  <label className="text-sm font-semibold text-text-secondary mb-1 block">Phase 1: Evidence Collection</label>
                   <textarea
                    rows={5} 
-                   className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none" 
+                   className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
                    value={prompts.evidence_prompt} 
                    onChange={(e) => setPrompts(p => ({...p, evidence_prompt: e.target.value}))} 
                   />
@@ -717,7 +722,7 @@ return (
                     {competencyAnalysis && (
                         <>
                             <div>
-                                <label className="text-sm font-medium mb-1 block">Task 1: KB Fulfillment Check</label>
+                                <label className="text-sm font-semibold text-text-secondary mb-1 block">Task 1: KB Fulfillment Check</label>
                                 <textarea
                                   rows={6} 
                                   className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
@@ -726,7 +731,7 @@ return (
                                 />
                             </div>
                             <div>
-                                <label className="text-sm font-medium mb-1 block">Task 2: Level Assignment & Narrative</label>
+                                <label className="text-sm font-semibold text-text-secondary mb-1 block">Task 2: Level Assignment & Narrative</label>
                                 <textarea
                                   rows={6} 
                                   className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
@@ -734,7 +739,7 @@ return (
                                 />
                             </div>
                             <div>
-                                <label className="text-sm font-medium mb-1 block">Task 3: Development Recommendations</label>
+                                <label className="text-sm font-semibold text-text-secondary mb-1 block">Task 3: Development Recommendations</label>
                                 <textarea
                                   rows={6} 
                                   className="w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono" 
@@ -746,9 +751,10 @@ return (
                     )}
                 </div>
 
-                <div className="border-t border-border pt-6">
-                    <div className="flex justify-between items-center mb-1">
-                      <label className={`text-sm font-medium ${!competencyAnalysis ? 'text-text-muted' : ''}`}>Executive Summary (Phase 3)</label>
+                {/* PHASE 3 PROMPTS */}
+                <div className="p-4 bg-bg-medium/30 rounded-lg border border-border space-y-4">
+                    <div className="flex justify-between items-center">
+                      <label className={`text-sm font-bold text-text-primary uppercase tracking-wide ${!competencyAnalysis ? 'text-text-muted' : ''}`}>Phase 3: Executive Summary</label>
                       <button
                         type="button" 
                         onClick={handleSummaryToggle}
@@ -758,14 +764,33 @@ return (
                         <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${competencyAnalysis && executiveSummary ? 'translate-x-6' : 'translate-x-1'}`} />
                       </button>
                     </div>
-                    <textarea 
-                      rows={5} 
-                      className={`w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm ${!competencyAnalysis ? 'opacity-50 bg-bg-medium' : ''}`} 
-                      disabled={!competencyAnalysis} 
-                      value={prompts.summary_prompt} 
-                      onChange={(e) => setPrompts(p => ({...p, summary_prompt: e.target.value}))} 
-                    />
+                    {executiveSummary && (
+                      <>
+                        <div>
+                          <label className="text-sm font-semibold text-text-secondary mb-1 block">Task 1: Summary Generation</label>
+                          <textarea 
+                            rows={5} 
+                            className={`w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono ${!competencyAnalysis ? 'opacity-50 bg-bg-medium' : ''}`}
+                            disabled={!competencyAnalysis} 
+                            value={prompts.summary_prompt} 
+                            onChange={(e) => setPrompts(p => ({...p, summary_prompt: e.target.value}))}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-semibold text-text-secondary block">Task 2: Critique & Refine Prompt</label>
+                          <p className="text-xs text-text-muted mb-1">Agent will check for conflicts and narrative flow.</p>
+                          <textarea 
+                            rows={4}
+                            className={`w-full rounded-md border border-border p-3 bg-bg-light shadow-sm text-sm focus:border-primary outline-none font-mono ${!competencyAnalysis ? 'opacity-50 bg-bg-medium' : ''}`}
+                            disabled={!competencyAnalysis}
+                            value={prompts.summary_critique_prompt}
+                            onChange={(e) => setPrompts(p => ({...p, summary_critique_prompt: e.target.value}))}
+                          />
+                        </div>
+                      </>
+                    )}
                 </div>
+
               </div>
             </section>
           )}
