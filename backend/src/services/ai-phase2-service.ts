@@ -379,7 +379,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       await publishEvent(userId, 'evidence-batch-saved', { reportId, competency: compName, count: 1 });
     }
 
-    await query("UPDATE reports SET status = 'COMPLETED' WHERE id = $1", [reportId]);
+    await query("UPDATE reports SET status = 'COMPLETED', active_phase = NULL WHERE id = $1", [reportId]);
     await publishEvent(userId, 'generation-complete', {
         reportId, phase: 2, status: 'COMPLETED', message: "Competency Analysis Complete."
     });
@@ -392,7 +392,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
         await publishEvent(userId, 'generation-cancelled', { reportId, message: "Analysis stopped." });
         return { status: 'CANCELLED' };
     }
-    await query("UPDATE reports SET status = 'FAILED' WHERE id = $1", [reportId]);
+    await query("UPDATE reports SET status = 'FAILED', active_phase = NULL WHERE id = $1", [reportId]);
     await publishEvent(userId, 'generation-failed', { reportId, message: error.message });
     throw error;
   } finally {

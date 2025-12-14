@@ -434,7 +434,7 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
       } // End competency loop
 
       // --- FINALIZE ---
-      await query("UPDATE reports SET status = 'COMPLETED' WHERE id = $1", [reportId]);
+      await query("UPDATE reports SET status = 'COMPLETED', active_phase = NULL WHERE id = $1", [reportId]);
 
       await publishEvent(userId, 'generation-complete', {
         reportId: reportId,
@@ -462,7 +462,7 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
     console.error(`[Worker] 🚨 Global Error:`, error.message);
 
     if (attemptsMade >= 5) {
-      await query("UPDATE reports SET status = 'FAILED' WHERE id = $1", [reportId]);
+      await query("UPDATE reports SET status = 'FAILED', active_phase = NULL WHERE id = $1", [reportId]);
       await publishEvent(userId, 'generation-failed', {
           reportId, phase: 1, status: 'FAILED', message: "AI unavailable."
       });

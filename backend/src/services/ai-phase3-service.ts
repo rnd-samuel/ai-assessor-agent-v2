@@ -220,7 +220,7 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
        VALUES ($1, $2, $3, $4, $5)`,
       [reportId, result.overview, result.strengths, result.weaknesses, result.recommendations]
     );
-    await client.query("UPDATE reports SET status = 'COMPLETED' WHERE id = $1", [reportId]);
+    await client.query("UPDATE reports SET status = 'COMPLETED', active_phase = NULL WHERE id = $1", [reportId]);
     await client.query('COMMIT');
 
     await publishEvent(userId, 'generation-complete', { 
@@ -235,7 +235,7 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
         await publishEvent(userId, 'generation-cancelled', { reportId, message: "Generation stopped." });
         return { status: 'CANCELLED' };
     }
-    await query("UPDATE reports SET status = 'FAILED' WHERE id = $1", [reportId]);
+    await query("UPDATE reports SET status = 'FAILED', active_phase = NULL WHERE id = $1", [reportId]);
     await publishEvent(userId, 'generation-failed', { reportId, message: error.message });
     throw error;
   } finally {

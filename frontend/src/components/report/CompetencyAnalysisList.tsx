@@ -16,6 +16,7 @@ interface CompetencyAnalysisListProps {
   onChange: (newData: CompetencyAnalysis[]) => void;
   isLastPhase: boolean;
   reportStatus: 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  processingPhase?: number | null;
   targetLevelsMap: Record<string, string>;
 }
 
@@ -30,6 +31,7 @@ export default function CompetencyAnalysisList({
   onChange,
   isLastPhase,
   reportStatus,
+  processingPhase,
   targetLevelsMap
 }: CompetencyAnalysisListProps) {
   
@@ -39,6 +41,8 @@ export default function CompetencyAnalysisList({
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+
+  const isProcessing = reportStatus === 'PROCESSING' && processingPhase === 2;
 
   const handleGenerateSummary = async () => {
     setIsGenerating(true);
@@ -111,46 +115,63 @@ export default function CompetencyAnalysisList({
 
       {/* Scrollable Content */}
       <div className="flex-grow overflow-y-auto p-6 space-y-6 bg-bg-medium/50">
-         {filteredData.length === 0 ? (
-             <div className="flex flex-col items-center justify-center h-64 text-center text-text-muted border-2 border-dashed border-border rounded-lg">
-                {data.length === 0 ? (
-                  <div className="space-y-3">
-                    <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto"></div>
-                    <p className="text-text-primary font-medium">Generating Analysis...</p>
-                    <p className="text-xs text-text-muted">This may take a moment.</p>
-                  </div>
-                ) : (
-                  <>
-                    <h3 className="text-lg font-semibold text-text-primary">No Competencies Found</h3>
-                    <p className="text-text-muted mt-1">No competencies match your filter.</p>
-                  </>
-                )}
-             </div>
-         ) : (
-             filteredData.map((item) => (
-                 <CompetencyAnalysisCard
-                    key={item.id}
-                    data={item}
-                    targetLevel={targetLevelsMap[item.competencyName] || "3"}
-                    isViewOnly={isViewOnly}
-                    onChange={handleCardChange}
-                    onAskAI={onAskAI}
-                    onHighlightEvidence={onHighlightEvidence}
-                 />
-             ))
-         )}
+        {/* CASE 1: EMPTY & PROCESSING (Centered Loader) */}
+        {filteredData.length === 0 && isProcessing && (
+          <div className="flex flex-col items-center justify-center h-64 text-center border-2 border-dashed border-border rounded-lg bg-bg-light/50 animate-fade-in">
+            <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
+            <p className="text-text-primary font-medium">AI is analyzing competencies...</p>
+            <p className="text-xs text-text-muted mt-1">This may take a few minutes.</p>
+            <button
+              onClick={onReset}
+              className="mt-6 text-xs text-text-muted hover:text-error underline transition-colors"
+            >
+              Taking too long? Stop Generation.
+            </button>
+          </div>
+        )}
+
+        {/* CASE 2: EMPTY & NOT PROCESSING (No Data) */}
+        {filteredData.length === 0 && !isProcessing && (
+          <div className="flex flex-col items-center justify-center h-64 text-center text-text-muted border-2 border-dashed border-border rounded-lg">
+            <h3 className="text-lg font-semibold text-text-primary">No Competencies Found</h3>
+            <p className="text-text-muted mt-1">No competencies match your filter or generation hasn't started.</p>
+          </div>
+        )}
+
+        {/* CASE 3: DATA EXISTS (List Cards) */}
+        {filteredData.length > 0 && (
+          <>
+            {filteredData.map((item) => (
+              <CompetencyAnalysisCard
+                key={item.id}
+                data={item}
+                targetLevel={targetLevelsMap[item.competencyName] || "3"}
+                isViewOnly={isViewOnly}
+                onChange={handleCardChange}
+                onAskAI={onAskAI}
+                onHighlightEvidence={onHighlightEvidence}
+              />
+            ))}
+
+            {/* CASE 4: DATA EXISTS & PROCESSING (Bottom Loader) */}
+            {isProcessing && (
+              <div className="w-full p-6 rounded-lg border-2 border-dashed border-primary/30 bg-primary/5 flex flex-col items-center justify-center animate-pulse mt-4">
+                <div className="flex items-center gap-2 text-primary font-semibold">
+                  <div className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full"></div>
+                  <span>Analyzing next competency...</span>
+                </div>
+                <p className="text-xs text-text-muted mt-1">Please wait while the AI continues.</p>
+                <button onClick={onReset} className="mt-3 text-[10px] text-text-muted hover:text-error underline">
+                  Stop Generation
+                </button>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Footer Actions */}
       <div className="p-4 border-t border-border bg-bg-light flex justify-end gap-3">
-        {reportStatus === 'PROCESSING' && (
-          <button
-            onClick={onReset}
-            className="text-xs text-error hover: underline font-medium"
-          >
-            Stop Generation
-          </button>
-        )}
 
         {/* RESUME BUTTON (Show if failed or partially done) */}
         {reportStatus === 'FAILED' && !isViewOnly && (
@@ -165,7 +186,7 @@ export default function CompetencyAnalysisList({
           </LoadingButton>
         )}
 
-        {!isViewOnly && data.length > 0 && !isLastPhase && reportStatus !== 'PROCESSING' && (
+        {!isViewOnly && data.length > 0 && !isLastPhase && !isProcessing && (
           <LoadingButton
             onClick={handleGenerateSummary}
             isLoading={isGenerating}

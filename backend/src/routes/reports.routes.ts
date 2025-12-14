@@ -264,7 +264,7 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
     const reportResult = await query(
       `SELECT 
          r.title, r.status, r.creator_id, r.project_id, r.target_levels,
-         r.specific_context, r.is_archived,
+         r.specific_context, r.is_archived, r.active_phase,
          p.creator_id as project_creator_id, p.dictionary_id,
          p.enable_analysis, p.enable_summary
        FROM reports r
@@ -394,6 +394,7 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       targetLevels: report.target_levels,
       specificContext: report.specific_context,
       isArchived: report.is_archived,
+      activePhase: report.active_phase,
       currentPhase,
       targetPhase,
       creatorId: report.creator_id,
@@ -606,7 +607,7 @@ router.post('/:id/generate/phase1', authenticateToken, async (req: Authenticated
 
     // 3. Update DB with Status AND the specific Job ID
     await query(
-      "UPDATE reports SET status = 'PROCESSING', active_job_id = $1 WHERE id = $2", 
+      "UPDATE reports SET status = 'PROCESSING', active_job_id = $1, active_phase = 1 WHERE id = $2",
       [job.id, reportId]
     );
 
@@ -668,7 +669,7 @@ router.post('/:id/generate/phase2', authenticateToken, async (req: Authenticated
 
     // Authorize new job
     await query(
-      "UPDATE reports SET status = 'PROCESSING', active_job_id = $1 WHERE id = $2", 
+      "UPDATE reports SET status = 'PROCESSING', active_job_id = $1, active_phase = 2 WHERE id = $2",
       [job.id, reportId]
     );
 
@@ -741,7 +742,7 @@ router.post('/:id/generate/phase3', authenticateToken, async (req: Authenticated
 
     // Authorize new job
     await query(
-      "UPDATE reports SET status = 'PROCESSING', active_job_id = $1 WHERE id = $2", 
+      "UPDATE reports SET status = 'PROCESSING', active_job_id = $1, active_phase = 3 WHERE id = $2",
       [job.id, reportId]
     );
 
@@ -905,7 +906,7 @@ router.post('/:id/reset-status', authenticateToken, async (req: AuthenticatedReq
   const { id: reportId } = req.params;
   try {
     await query(
-      "UPDATE reports SET status = 'FAILED', active_job_id = NULL WHERE id = $1",
+      "UPDATE reports SET status = 'FAILED', active_job_id = NULL, active_phase = NULL WHERE id = $1",
       [reportId]
     );
     res.status(200).send({ message: "Report status reset to FAILED." });

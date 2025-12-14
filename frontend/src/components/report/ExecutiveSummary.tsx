@@ -17,6 +17,7 @@ interface ExecutiveSummaryProps {
   data: SummaryData | null;
   onChange: (newData: SummaryData) => void;
   reportStatus: 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  processingPhase?: number | null;
   onGenerate: () => void;
   onReset: () => void;
   isGenerating: boolean;
@@ -42,13 +43,14 @@ export default function ExecutiveSummary({
   data,
   onChange,
   reportStatus,
+  processingPhase,
   onGenerate,
   onReset,
   isGenerating
 }: ExecutiveSummaryProps) {
   
   // Is empty if no data OR if we are currently processing (show loader instead of empty fields)
-  const showLoader = reportStatus === 'PROCESSING' || isGenerating;
+  const isProcessing = reportStatus === 'PROCESSING' && processingPhase === 3 || isGenerating;
   const hasData = data && (data.overview || data.strengths);
 
   // Handle Local Updates
@@ -62,27 +64,30 @@ return (
     <div className="flex flex-col h-full overflow-y-auto p-6 space-y-6 bg-bg-medium/50">
       <div className="flex justify-between items-center">
         <h3 className="text-lg font-semibold text-text-primary">Executive Summary</h3>
-        
-        {/* Controls */}
+
         <div className="flex gap-2">
-            {reportStatus === 'FAILED' && !isViewOnly && (
-                <button onClick={onGenerate} className="text-xs text-primary hover:underline font-medium">
-                    Retry Generation
-                </button>
-            )}
-            {reportStatus === 'PROCESSING' && (
-                <button onClick={onReset} className="text-xs text-error hover:underline font-medium">
-                    Stop Generation
-                </button>
-            )}
+          {(reportStatus === 'FAILED' || (reportStatus === 'COMPLETED' && hasData && !isViewOnly)) && !isProcessing && (
+            <button 
+              onClick={onGenerate} 
+              className="text-xs text-primary hover:underline font-medium"
+            >
+              {reportStatus === 'FAILED' ? 'Retry Generation' : 'Regenerate Summary'}
+            </button>
+          )}
         </div>
       </div>
 
-      {showLoader ? (
+      {isProcessing ? (
         <div className="flex flex-col items-center justify-center h-64 text-center border-2 border-dashed border-border rounded-lg bg-bg-light/50">
            <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mb-3"></div>
            <p className="text-text-primary font-medium">AI is writing the summary...</p>
            <p className="text-xs text-text-muted">Drafting narrative: Checking for conflicts</p>
+           <button
+            onClick={onReset}
+            className="mt-6 text-xs text-text-muted hover:text-error underline transition-colors"
+           >
+            Stop Generation
+           </button>
         </div>
       ) : !hasData ? (
          <div className="flex flex-col items-center justify-center h-64 text-center border-2 border-dashed border-border rounded-lg bg-bg-light/50">

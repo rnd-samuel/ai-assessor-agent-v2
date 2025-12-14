@@ -39,6 +39,7 @@ interface ReportData {
   // These come from the API now, but we store them in separate state
   competencyAnalysis?: CompetencyAnalysis[]; 
   executiveSummary?: any;
+  activePhase?: number | null;
 }
 
 type AnalysisTab = 'evidence' | 'competency' | 'summary';
@@ -366,7 +367,11 @@ export default function ReportPage() {
       const response = await apiService.get<ReportData>(`/reports/${reportId}/data`);
       
       // 1. Handle Report Data
-      setReportData(response.data);
+      setReportData({
+          ...response.data,
+          // Ensure it's mapped if backend sends it
+          activePhase: response.data.activePhase 
+      });
       setReportTitle(response.data.title);
       
       if (!activeFileId && response.data.rawFiles.length > 0) {
@@ -1064,6 +1069,7 @@ const blocker = useBlocker(
                             setModals(prev => ({ ...prev, deleteEvidence: true }));
                         }}
                         reportStatus={reportData?.status || 'CREATED'}
+                        processingPhase={reportData?.activePhase}
                         onGeneratePhase1={handleGeneratePhase1}
                         onGenerateNext={handleGeneratePhase2}
                         onReset={handleReset}
@@ -1096,6 +1102,7 @@ const blocker = useBlocker(
                         data={competencyData}
                         isLastPhase={reportData?.targetPhase === 2}
                         reportStatus={reportData?.status || 'CREATED'}
+                        processingPhase={reportData?.activePhase}
                         onChange={(newData) => {
                           setCompetencyData(newData);
                           setIsDirty(true);
@@ -1114,6 +1121,7 @@ const blocker = useBlocker(
                           setIsDirty(true);
                         }}
                         reportStatus={reportData?.status || 'CREATED'}
+                        processingPhase={reportData?.activePhase}
                         onGenerate={handleGeneratePhase3}
                         onReset={handleReset}
                         isGenerating={reportData?.status === 'PROCESSING'}

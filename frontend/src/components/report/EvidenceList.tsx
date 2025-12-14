@@ -39,6 +39,7 @@ interface EvidenceListProps {
   onGenerateNext: () => void;
   onReset: () => void;
   onRefresh?: () => void;
+  processingPhase?: number | null;
 }
 
 export default function EvidenceList({
@@ -55,6 +56,7 @@ export default function EvidenceList({
   onDelete,
   onCreate,
   reportStatus,
+  processingPhase,
   targetPhase,
   isResetting,
   onGeneratePhase1,
@@ -76,6 +78,8 @@ export default function EvidenceList({
   const [isSkipModalOpen, setIsSkipModalOpen] = useState(false);
   const [isGenEvidenceLoading, setIsGenEvidenceLoading] = useState(false);
   const [isNextPhaseLoading, setIsNextPhaseLoading] = useState(false);
+
+  const isProcessing = reportStatus === 'PROCESSING' && processingPhase === 1;
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
@@ -397,7 +401,7 @@ export default function EvidenceList({
         <div className="flex flex-col items-center justify-center h-64 text-center text-text-muted border-2 border-dashed border-border rounded-lg bg-bg-light/50">
           
           {/* PRIORITY: Check loading first to prevent blink */}
-          {(reportStatus === 'PROCESSING' || isGenEvidenceLoading) ? (
+          {(isProcessing || isGenEvidenceLoading) ? (
             <div className="animate-fade-in flex flex-col items-center">
               <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
               <p className="text-text-primary font-medium">AI is analyzing documents...</p>
@@ -450,7 +454,7 @@ export default function EvidenceList({
               onToggleSelect={() => handleToggleSelect(ev.id)}
             />
           ))}
-          {reportStatus === 'PROCESSING' && (
+          {isProcessing && (
             <div className="w-full p-4 rounded-lg border-2 border-dashed border-primary/30 bg-primary/5 flex flex-col items-center justify-center animate-pulse mt-4">
               <div className="flex items-center gap-2 text-primary font-semibold">
                 <div className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full"></div>
@@ -475,7 +479,7 @@ export default function EvidenceList({
           Export List
         </button>
 
-        {!isViewOnly && targetPhase > 1 && reportStatus !== 'PROCESSING' && (
+        {!isViewOnly && targetPhase > 1 && !isProcessing && (
           <LoadingButton
             onClick={handleNextClick}
             isLoading={isNextPhaseLoading}
@@ -487,7 +491,7 @@ export default function EvidenceList({
         )}
 
         {/* Show "Processing..." disabled button if active */}
-        {reportStatus === 'PROCESSING' && (
+        {isProcessing && (
           <button disabled className="bg-bg-medium text-text-muted rounded-md text-sm font-semibold px-4 py-2 cursor-not-allowed opacity-70 flex items-center gap-2">
             <div className="animate-spin h-3 w-3 border-2 border-current border-t-transparent rounded-full"></div>
             AI Working...
