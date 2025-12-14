@@ -165,7 +165,7 @@ export default function CompetencyAnalysisList({
           </LoadingButton>
         )}
 
-        {!isViewOnly && data.length > 0 && !isLastPhase && (
+        {!isViewOnly && data.length > 0 && !isLastPhase && reportStatus !== 'PROCESSING' && (
           <LoadingButton
             onClick={handleGenerateSummary}
             isLoading={isGenerating}
