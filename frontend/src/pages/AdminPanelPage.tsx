@@ -66,7 +66,7 @@ export default function AdminPanelPage() {
     addUser: false,
     editUser: false,
     deleteUserConfirm: false,
-    promptHistory: false,
+    // TODO: promptHistory: false
     selectSimMethod: false,
   });
   
@@ -1259,7 +1259,7 @@ export default function AdminPanelPage() {
                     <div>
                       <div className="flex justify-between items-center mb-1">
                         <label className="text-sm font-semibold mb-1 block">Persona (System Prompt)</label>
-                        <button onClick={() => openModal('promptHistory')} className="text-xs font-medium text-primary hover:underline">View History</button>
+                        {/** <button onClick={() => openModal('promptHistory')} className="text-xs font-medium text-primary hover:underline">View History</button> */}
                       </div>
                       <textarea 
                         rows={3} 
@@ -1896,7 +1896,7 @@ export default function AdminPanelPage() {
         </div>
       )}
 
-      {/* ... (Other modals: deleteUserConfirm, promptHistory) ... */}
+      {/* ... TODO: (Other modals: deleteUserConfirm, promptHistory) ... */}
 
     </div>
   );
