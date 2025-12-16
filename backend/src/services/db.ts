@@ -8,29 +8,29 @@ if (!dbUrlString) {
   throw new Error("DATABASE_URL is not set in .env file");
 }
 
-// Parse the URL to get the components
-const parsedDbUrl = new URL(dbUrlString);
+console.log(`[DB] Initializing connection pool...`);
 
-// Create the pool with the individual properties AND the SSL config
+// FIX: Use 'connectionString' directly. 
+// This allows 'pg' to automatically handle the '?host=' query param 
+// needed for Cloud Run Unix Sockets.
 export const pool = new Pool({
-  host: parsedDbUrl.hostname,
-  port: parseInt(parsedDbUrl.port, 10),
-  user: parsedDbUrl.username,
-  password: parsedDbUrl.password,
-  database: parsedDbUrl.pathname.substring(1), // Removes the leading '/'
+  connectionString: dbUrlString,
   ssl: {
+    // We allow self-signed certs (common in cloud environments)
+    // Note: For Unix sockets (Cloud Run), SSL is often skipped automatically by pg,
+    // but this setting is safe to keep for compatibility.
     rejectUnauthorized: false
   }
 });
 
-// Test the connection
+// Test the connection logic
 pool.connect((err, client, release) => {
   if (err) {
-    console.error('Error acquiring client', err.stack);
-    console.log('🚨 Failed to connect to PostgreSQL. Check DATABASE_URL and GCP firewall rules.');
+    console.error('[DB] 🚨 Connection Error:', err.message);
+    // We don't crash the process here, so the logs can be read in Cloud Run
   } else {
     if (client) {
-      console.log('Connected to PostgreSQL database successfully. 🎉');
+      console.log('[DB] ✅ Connected successfully.');
       client.release();
     }
   }
