@@ -984,7 +984,7 @@ const blocker = useBlocker(
       {/* [NEW] AI Disclaimer Banner - Placed cleanly below header */}
       <div className="bg-gray-50 border-b border-gray-100 px-6 py-1.5 flex items-center justify-center text-xs text-gray-500 shadow-sm z-10 flex-shrink-0">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2 opacity-80"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-          <span className="font-medium opacity-90">This Assessment AI Agent can make mistakes. Be sure to double-check the results.</span>
+          <span className="font-medium opacity-90">This AI Assessor Agent can make mistakes. Be sure to double-check the results.</span>
       </div>
 
       {/* Main Split View (Resizable) */}

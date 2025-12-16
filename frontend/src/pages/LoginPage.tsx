@@ -87,10 +87,13 @@ export default function LoginPage() {
   const renderLogin = () => (
     <div id="loginView">
       {/* Company Logo Placeholder */}
-      <div className="flex justify-center mb-4">
-        <div className="w-32 h-16 bg-bg-medium rounded-md flex items-center justify-center border border-border">
-          <span className="text-xs text-text-muted">Your Logo Here</span>
-        </div>
+      <div className="flex justify-center mb-6">
+        {/* Ensure 'full-logo.png' exists in your frontend/public folder */}
+        <img 
+          src="/Logo HCC.png" 
+          alt="HCC logo" 
+          className="h-16 w-auto object-contain" 
+        />
       </div>
 
       <div className="flex items-center justify-center gap-3 mb-6">
