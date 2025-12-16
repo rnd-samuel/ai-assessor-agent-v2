@@ -9,6 +9,6 @@ export default defineConfig({
   // --- THIS IS THE FIX ---
   // This tells Vite to build using relative paths (e.g., "./assets/")
   // instead of absolute paths (e.g., "/assets/").
-  base: './'
+  base: '/'
   // --- END OF FIX ---
 })
