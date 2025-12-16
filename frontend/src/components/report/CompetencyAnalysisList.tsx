@@ -18,6 +18,7 @@ interface CompetencyAnalysisListProps {
   reportStatus: 'CREATED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   processingPhase?: number | null;
   targetLevelsMap: Record<string, string>;
+  askAiEnabled?: boolean;
 }
 
 export default function CompetencyAnalysisList({
@@ -32,7 +33,8 @@ export default function CompetencyAnalysisList({
   isLastPhase,
   reportStatus,
   processingPhase,
-  targetLevelsMap
+  targetLevelsMap,
+  askAiEnabled
 }: CompetencyAnalysisListProps) {
   
   // Filters
@@ -150,6 +152,7 @@ export default function CompetencyAnalysisList({
                 onChange={handleCardChange}
                 onAskAI={onAskAI}
                 onHighlightEvidence={onHighlightEvidence}
+                askAiEnabled={askAiEnabled}
               />
             ))}
 

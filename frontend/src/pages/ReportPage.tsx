@@ -36,7 +36,7 @@ interface ReportData {
   }[];
   dictionary: any;
   targetLevels: Record<string, string>;
-  // These come from the API now, but we store them in separate state
+  askAiEnabled: boolean;
   competencyAnalysis?: CompetencyAnalysis[]; 
   executiveSummary?: any;
   activePhase?: number | null;
@@ -896,7 +896,7 @@ const blocker = useBlocker(
       
       {/* Header */}
       <header className="flex-shrink-0 h-16 bg-bg-light border-b border-border flex items-center justify-between px-6 z-20">
-        <div className="flex items-center gap-4 flex-1">
+        <div className="flex items-center gap-4 flex-1 overflow-hidden">
             <input
               type="text"
               className="text-lg font-bold text-text-primary bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none transition-colors w-full max-w-md"
@@ -980,6 +980,12 @@ const blocker = useBlocker(
              </button>
         </div>
       </header>
+
+      {/* [NEW] AI Disclaimer Banner - Placed cleanly below header */}
+      <div className="bg-gray-50 border-b border-gray-100 px-6 py-1.5 flex items-center justify-center text-xs text-gray-500 shadow-sm z-10 flex-shrink-0">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2 opacity-80"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <span className="font-medium opacity-90">This Assessment AI Agent can make mistakes. Be sure to double-check the results.</span>
+      </div>
 
       {/* Main Split View (Resizable) */}
       <div ref={containerRef} className="flex flex-1 overflow-hidden relative">
@@ -1099,6 +1105,7 @@ const blocker = useBlocker(
                         targetLevelsMap={nameToTargetLevelMap}
                         onHighlightEvidence={handleQuoteSelection}
                         onAskAI={handleAskAI}
+                        askAiEnabled={reportData?.askAiEnabled ?? false}
                         data={competencyData}
                         isLastPhase={reportData?.targetPhase === 2}
                         reportStatus={reportData?.status || 'CREATED'}
@@ -1115,6 +1122,7 @@ const blocker = useBlocker(
                         reportId={reportId || ''}
                         isViewOnly={isViewOnly}
                         onAskAI={handleAskAI}
+                        askAiEnabled={reportData?.askAiEnabled ?? false}
                         data={summaryData}
                         onChange={(newData) => {
                           setSummaryData(newData);

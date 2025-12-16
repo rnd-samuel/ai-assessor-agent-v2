@@ -126,6 +126,12 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
     const report = reportRes.rows[0];
     if (!report) throw new Error("Report not found");
 
+    // Get Global Knowledge Base
+    const globalRes = await query(
+      "SELECT value FROM system_settings WHERE key = 'global_context_guide'"
+    );
+    const globalKb = globalRes.rows[0]?.value?.text || "";
+
     // Get Competency Dictionary & Prompts
     const projectRes = await query(
       `SELECT 
@@ -133,13 +139,14 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
          pp.persona_prompt, 
          pp.evidence_prompt,
          pp.general_context as project_brief
+         p.context_guide as project_kb
        FROM projects p
        JOIN competency_dictionaries cd ON p.dictionary_id = cd.id
        JOIN project_prompts pp ON p.id = pp.project_id
        WHERE p.id = $1`,
       [report.project_id]
     );
-    const { dictionary, project_knowledge_context, persona_prompt, evidence_prompt, project_brief } = projectRes.rows[0];
+    const { dictionary, persona_prompt, evidence_prompt, project_brief, project_kb } = projectRes.rows[0];
 
     const simContextsRes = await query(
         `SELECT gsm.name as method_name, gsf.context_guide
@@ -258,11 +265,15 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
 
           // Prompt Construction
           const systemPrompt = `${persona_prompt}
+
+            === GLOBAL ASSESSMENT STANDARDS ===
+            ${globalKb || "No global guide available."}
+
+            === PROJECT KNOWLEDGE BASE ===
+            ${project_kb || "No specific project knowledge guide available."}
+
             === PROJECT CONTEXT ===
             ${project_brief || "N/A"}
-
-            === MASTER ASSESSMENT GUIDE (PROJECT KNOWLEDGE) ===
-            ${project_knowledge_context || "No specific project knowledge guide available."}
 
             You are strictly analyzing the candidate's performance based on the data provided.
           `;

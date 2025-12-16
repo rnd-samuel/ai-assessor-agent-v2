@@ -21,6 +21,7 @@ interface ExecutiveSummaryProps {
   onGenerate: () => void;
   onReset: () => void;
   isGenerating: boolean;
+  askAiEnabled?: boolean;
 }
 
 const AutoTextarea = (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => {
@@ -46,7 +47,8 @@ export default function ExecutiveSummary({
   processingPhase,
   onGenerate,
   onReset,
-  isGenerating
+  isGenerating,
+  askAiEnabled
 }: ExecutiveSummaryProps) {
   
   // Is empty if no data OR if we are currently processing (show loader instead of empty fields)
@@ -126,7 +128,7 @@ return (
           <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
             <div className="flex justify-between items-center mb-2">
               <label className="text-base font-semibold text-text-primary">Overall Strengths</label>
-              {!isViewOnly && (
+              {!isViewOnly && askAiEnabled && (
                 <button
                   onClick={() => onAskAI('Refine Strengths', data?.strengths || '', (t) => handleChange('strengths', t))}
                   className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
@@ -148,7 +150,7 @@ return (
           <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
             <div className="flex justify-between items-center mb-2">
               <label className="text-base font-semibold text-text-primary">Overall Weaknesses</label>
-              {!isViewOnly && (
+              {!isViewOnly && askAiEnabled && (
                 <button
                   onClick={() => onAskAI('Refine Weaknesses', data?.areas_for_improvement || '', (t) => handleChange('areas_for_improvement', t))}
                   className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
@@ -170,7 +172,7 @@ return (
           <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
             <div className="flex justify-between items-center mb-2">
               <label className="text-base font-semibold text-text-primary">Overall Recommendations</label>
-              {!isViewOnly && (
+              {!isViewOnly && askAiEnabled && (
                 <button
                   onClick={() => onAskAI('Refine Recommendations', data?.recommendations || '', (t) => handleChange('recommendations', t))}
                   className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"

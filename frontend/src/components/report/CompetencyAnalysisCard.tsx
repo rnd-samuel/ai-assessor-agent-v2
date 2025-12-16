@@ -9,6 +9,7 @@ interface CompetencyAnalysisCardProps {
   onChange: (updated: CompetencyAnalysis) => void;
   onAskAI: (context: string, currentText: string, onApply: (t: string) => void) => void;
   onHighlightEvidence: (quote: string, source: string) => void;
+  askAiEnabled?: boolean;
 }
 
 const AutoTextarea = (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => {
@@ -33,6 +34,7 @@ export default function CompetencyAnalysisCard({
   onChange,
   onAskAI,
   onHighlightEvidence,
+  askAiEnabled
 }: CompetencyAnalysisCardProps) {
   const [level, setLevel] = useState(data.levelAchieved?.toString() || "0");
   const [explanation, setExplanation] = useState(data.explanation);
@@ -133,12 +135,12 @@ export default function CompetencyAnalysisCard({
         <div className="relative group">
           <div className="flex justify-between items-center mb-1">
             <label className="text-sm font-medium text-text-primary">Analysis Summary</label>
-            {!isViewOnly && (
+            {!isViewOnly && askAiEnabled && (
               <button
                 onClick={() => onAskAI('Refine explanation', explanation, (t) => { setExplanation(t); handleUpdate({ explanation: t }); })}
                 className="p-1 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
               >
-                ✨ Refine
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
               </button>
             )}
           </div>
@@ -184,7 +186,7 @@ export default function CompetencyAnalysisCard({
                           {kbs.map((k, i) => (
                               <div key={i} className={`w-1.5 h-1.5 rounded-full ${
                                   k.status === 'FULFILLED' ? 'bg-success' : 
-                                  k.status === 'CONTRA_INDICATOR' ? 'bg-error' : 'bg-gray-200'
+                                  k.status === 'CONTRA_INDICATOR' ? 'bg-error' : 'bg-gray-400'
                               }`} />
                           ))}
                       </div>
@@ -196,7 +198,7 @@ export default function CompetencyAnalysisCard({
                   {openLevels[lvl] && (
                     <div className="px-4 pb-4 space-y-3">
                       {kbs.map((kb) => (
-                        <div key={kb.id} className="border border-border rounded-md p-3 bg-white hover:border-primary/30 transition-colors">
+                        <div key={kb.id} className="relative border border-border rounded-md p-3 bg-white hover:border-primary/30 transition-colors group/kb">
                           <div className="flex items-start gap-3">
                             {/* 3-State Checkbox / Status Toggle */}
                             <button
@@ -222,15 +224,17 @@ export default function CompetencyAnalysisCard({
                               </div>
 
                               {/* Reasoning Field */}
-                              <div className="mt-3">
-                                <AutoTextarea
-                                  rows={1}
-                                  placeholder="Reasoning..."
-                                  className="w-full text-xs text-text-secondary bg-bg-medium/30 border-b border-transparent focus:border-primary focus:bg-white transition-colors outline-none p-2 rounded"
-                                  value={kb.reasoning || ''}
-                                  disabled={isViewOnly}
-                                  onChange={(e) => updateKb(kb.id, { reasoning: e.target.value })}
-                                />
+                              <div className="mt-3 relative">
+                                <div className="flex justify-between items-center mb-1">
+                                  <AutoTextarea
+                                    rows={1}
+                                    placeholder="Reasoning..."
+                                    className="w-full text-xs text-text-secondary bg-bg-medium/30 border-b border-transparent focus:border-primary focus:bg-white transition-colors outline-none p-2 pb-8 rounded"
+                                    value={kb.reasoning || ''}
+                                    disabled={isViewOnly}
+                                    onChange={(e) => updateKb(kb.id, { reasoning: e.target.value })}
+                                  />
+                                </div>
                               </div>
 
                               {/* Evidence Chips */}
@@ -250,6 +254,20 @@ export default function CompetencyAnalysisCard({
                               )}
                             </div>
                           </div>
+                          
+                          {!isViewOnly && askAiEnabled && (
+                            <button
+                              onClick={() => onAskAI(
+                                `Refine reasoning for Key Behavior: "${kb.kbText}". Current status: ${kb.status}`, 
+                                kb.reasoning || '', 
+                                (t) => updateKb(kb.id, { reasoning: t })
+                              )}
+                              className="absolute bottom-2 right-2 p-1.5 text-[10px] bg-white text-primary border border-primary/20 shadow-sm rounded-md opacity-0 group-hover/kb:opacity-100 transition-all hover:bg-primary/5 flex items-center gap-1.5"
+                              title="Refine with AI"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -269,7 +287,7 @@ export default function CompetencyAnalysisCard({
                         onClick={() => onAskAI('Refine recommendations', recommendation, (t) => { setRecommendation(t); handleUpdate({ developmentRecommendations: t }); })}
                         className="p-1 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
                     >
-                        ✨ Refine
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
                     </button>
                 )}
             </div>

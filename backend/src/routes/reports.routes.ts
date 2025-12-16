@@ -284,6 +284,10 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       return res.status(403).send({ message: 'Forbidden.' });
     }
 
+    const settingsRes = await query("SELECT value FROM system_settings WHERE key = 'ai_config'");
+    const aiConfig = settingsRes.rows[0]?.value || {};
+    const askAiEnabled = aiConfig.askAiEnabled ?? false;
+
     // 2. Calculate Target Phase
     let targetPhase = 1;
     if (report.enable_analysis) targetPhase = 2;
@@ -402,7 +406,8 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
       rawFiles: rawFiles, // Now contains the reconstructed text!
       competencyAnalysis: fullAnalysis,
       executiveSummary: summaryResult.rows[0] || null,
-      dictionary
+      dictionary,
+      askAiEnabled
     });
 
   } catch (error) {

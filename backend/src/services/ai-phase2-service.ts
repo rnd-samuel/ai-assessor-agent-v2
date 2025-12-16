@@ -177,6 +177,10 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
     const projectId = report.project_id;
     const specificContext = report.specific_context || "";
 
+    // Global Knowledge Base
+    const globalRes = await query("SELECT value FROM system_settings WHERE key = 'global_context_guide'");
+    const globalKb = globalRes.rows[0]?.value?.text || "";
+
     const projectRes = await query(
       `SELECT 
          cd.content as dictionary, 
@@ -184,14 +188,15 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
          pp.kb_fulfillment_prompt,
          pp.competency_level_prompt,
          pp.development_prompt,
-         pp.general_context
+         pp.general_context,
+         p.context_guide as project_kb
        FROM projects p 
        JOIN competency_dictionaries cd ON p.dictionary_id = cd.id 
        JOIN project_prompts pp ON p.id = pp.project_id
        WHERE p.id = $1`, 
       [report.project_id]
     );
-    const { dictionary, persona_prompt, general_context } = projectRes.rows[0];
+    const { dictionary, persona_prompt, general_context, project_kb } = projectRes.rows[0];
 
     // Fallbacks for prompts (Handle legacy projects or missing fields)
     const kbPrompt = projectRes.rows[0].kb_fulfillment_prompt || DEFAULT_KB_PROMPT;
@@ -285,6 +290,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
             comp, levelNum, relevantEvidence, judgmentModel, 
             persona_prompt, simContextMap, kbPrompt,
             general_context, specificContext,
+            globalKb, project_kb,
             reportId, userId, currentJobId, projectId
          );
          levelResults[levelNum] = judgments;
@@ -307,6 +313,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           const { judgments, aiLogId } = await evaluateKeyBehaviors(
             comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
             simContextMap, kbPrompt, general_context, specificContext,
+            globalKb, project_kb,
             reportId, userId, currentJobId, projectId
           );
           levelResults[nextLevel] = judgments;
@@ -337,6 +344,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
           const { judgments, aiLogId } = await evaluateKeyBehaviors(
             comp, nextLevel, relevantEvidence, judgmentModel, persona_prompt,
             simContextMap, kbPrompt, general_context, specificContext,
+            globalKb, project_kb,
             reportId, userId, currentJobId, projectId
           );
           levelResults[nextLevel] = judgments;
@@ -356,6 +364,7 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       const { finalLevel, explanation, aiLogId: narrativeLogId } = await determineLevelAndNarrative(
           compName, targetLevel, allCheckedLevels, levelResults, comp.level,
           narrativeModel, persona_prompt, levelPrompt, general_context, specificContext,
+          globalKb, project_kb,
           reportId, userId, currentJobId, projectId
       );
 
@@ -365,7 +374,8 @@ export async function runPhase2Generation(reportId: string, userId: string, job:
       const recommendations = await generateRecommendations(
           compName, finalLevel, levelResults,
           narrativeModel, persona_prompt, devPrompt, general_context,
-          specificContext, reportId, userId, currentJobId, projectId
+          specificContext, globalKb, project_kb,
+          reportId, userId, currentJobId, projectId
       );
       const recLogId = recommendations.aiLogId;
 
@@ -456,6 +466,7 @@ function generateDefaultJudgments(lvlObj: any) {
 async function evaluateKeyBehaviors(
     comp: any, level: number, allRelevantEvidence: any[], model: string, persona: string,
     simContextMap: Record<string, string>, instructions: string, projectContext: string,
+    globalKb: string, projectKb: string,
     reportContext: string, reportId: string, userId: string, jobId: string, projectId: string
 ) {
     const lvlObj = comp.level.find((l: any) => String(l.nomor) === String(level));
@@ -474,6 +485,12 @@ async function evaluateKeyBehaviors(
     const prompt = `
     ${persona}
     ${instructions}
+
+    === GLOBAL GUIDELINES ===
+    ${globalKb || "N/A"}
+
+    === PROJECT GUIDELINES ===
+    ${projectKb || "N/A"}
 
     === DATA FOR ANALYSIS ===
     
@@ -555,7 +572,8 @@ async function determineLevelAndNarrative(
     compName: string, targetLevel: number, levelsChecked: number[], levelResults: any,
     allLevelDefinitions: any[],
     model: string, persona: string, instructions: string, projectContext: string,
-    reportContext: string, reportId: string, userId: string, jobId: string, projectId: string
+    reportContext: string, globalKb: string, projectKb: string,
+    reportId: string, userId: string, jobId: string, projectId: string
 ) {
     let resultsSummary = "";
     for (const lvl of levelsChecked) {
@@ -572,6 +590,12 @@ async function determineLevelAndNarrative(
     const prompt = `
     ${persona}
     ${instructions}
+
+    === GLOBAL GUIDELINES ===
+    ${globalKb || "N/A"}
+
+    === PROJECT GUIDELINES ===
+    ${projectKb || "N/A"}
 
     === DATA FOR DECISION ===
     **COMPETENCY:** ${compName}
@@ -621,6 +645,7 @@ async function determineLevelAndNarrative(
 async function generateRecommendations(
     compName: string, finalLevel: number, levelResults: any,
     model: string, persona: string, instructions: string, projectContext: string,
+    globalKb: string, projectKb: string,
     reportContext: string, reportId: string, userId: string, jobId: string, projectId: string
 ) {
     let gapsText = "";
@@ -645,6 +670,12 @@ async function generateRecommendations(
     === DATA FOR RECOMMENDATIONS ===
     **COMPETENCY:** ${compName}
     **CURRENT ASSIGNED LEVEL:** ${finalLevel}
+
+    === GLOBAL GUIDELINES ===
+    ${globalKb || "N/A"}
+
+    === PROJECT GUIDELINES ===
+    ${projectKb || "N/A"}
 
     **PROJECT CONTEXT:**
     ${projectContext}
