@@ -10,24 +10,20 @@ if (!dbUrlString) {
 
 console.log(`[DB] Initializing connection pool...`);
 
-// FIX: Use 'connectionString' directly. 
-// This allows 'pg' to automatically handle the '?host=' query param 
-// needed for Cloud Run Unix Sockets.
+// We check if the URL implies a Unix Socket (Cloud Run)
+const isSocket = dbUrlString.includes('host=/cloudsql');
+
 export const pool = new Pool({
   connectionString: dbUrlString,
-  ssl: {
-    // We allow self-signed certs (common in cloud environments)
-    // Note: For Unix sockets (Cloud Run), SSL is often skipped automatically by pg,
-    // but this setting is safe to keep for compatibility.
-    rejectUnauthorized: false
-  }
+  // Only enforce SSL if we are NOT using a socket (e.g. local dev with Public IP)
+  // For Cloud Run sockets, we explicitly disable the SSL config object to avoid the "not supported" error
+  ssl: isSocket ? undefined : { rejectUnauthorized: false }
 });
 
-// Test the connection logic
+// Test the connection
 pool.connect((err, client, release) => {
   if (err) {
     console.error('[DB] 🚨 Connection Error:', err.message);
-    // We don't crash the process here, so the logs can be read in Cloud Run
   } else {
     if (client) {
       console.log('[DB] ✅ Connected successfully.');

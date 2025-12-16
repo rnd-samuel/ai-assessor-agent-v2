@@ -25,7 +25,10 @@ const port = process.env.PORT || 3001;
 
 // --- 1. Middleware ---
 app.use(cors({
-  origin: "https://ai-assessor-agent.vercel.app/", // Allow all origins (or set to ["http://localhost:5173"] for stricter security)
+  origin: [
+    "http://localhost:5173",
+    "https://ai-assessor-agent.vercel.app"
+  ],
   exposedHeaders: ['Content-Disposition']
 }));
 app.use(express.json({ limit: '50mb' }));
