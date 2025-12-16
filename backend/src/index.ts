@@ -12,6 +12,7 @@ import { authenticateToken, authorizeRole } from './middleware/auth.middleware';
 import projectsRoutes from './routes/projects.routes';
 import reportsRoutes from './routes/reports.routes';
 import adminRoutes from './routes/admin.routes';
+import './worker';
 
 import { Job } from 'bullmq';
 
