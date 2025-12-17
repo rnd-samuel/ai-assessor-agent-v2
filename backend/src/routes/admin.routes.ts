@@ -691,6 +691,39 @@ router.get('/users', async (req: AuthenticatedRequest, res) => {
 });
 
 /**
+ * (ADM-8.10) Create a New User (Admin Only)
+ * Bypasses the 'inviteCode' check because the requester is an authenticated Admin.
+ */
+router.post('/users', async (req: AuthenticatedRequest, res) => {
+  const { name, email, password, role } = req.body;
+
+  if (!email || !password || !name || !role) {
+    return res.status(400).send({ message: "All fields are required." });
+  }
+
+  try {
+    // 1. Hash Password
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    // 2. Insert User
+    const result = await query(
+      "INSERT INTO users (email, password_hash, role, name) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role, created_at",
+      [email.toLowerCase(), passwordHash, role, name]
+    );
+
+    res.status(201).json(result.rows[0]);
+
+  } catch (error: any) {
+    console.error("Admin Create User Error:", error);
+    if (error.code === '23505') {
+      return res.status(409).send({ message: "User with this email already exists." });
+    }
+    res.status(500).send({ message: "Internal server error." });
+  }
+});
+
+/**
  * (ADM-8.10) Delete a User
  */
 router.delete('/users/:id', async (req: AuthenticatedRequest, res) => {

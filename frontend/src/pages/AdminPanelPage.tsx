@@ -747,7 +747,7 @@ export default function AdminPanelPage() {
     setIsSavingUser(true);
     try {
       // Using the public register route is fine for now, or you could make a protected admin one.
-      await apiService.post('/auth/register', newUser);
+      await apiService.post('/admin/users', newUser);
       addToast('User added successfully!', 'success');
       setIsDirty(false);
       closeModal('addUser');
