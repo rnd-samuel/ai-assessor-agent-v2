@@ -94,10 +94,14 @@ async function smartAIRequest(
 
 // --- OUTPUT SCHEMA ---
 const SummarySchema = z.object({
-  overview: z.string().describe("A narrative story combining strengths and weaknesses interacting with each other."),
-  strengths: z.string().describe("Bulleted list or paragraphs of strengths."),
-  weaknesses: z.string().describe("Bulleted list or paragraphs of areas for improvement."),
-  recommendations: z.string().describe("Actionable development steps.")
+  overview: z.string().describe("A narrative story combining strengths and weaknesses..."),
+  strengths: z.array(z.string()).describe("A list of distinct strengths."),
+  weaknesses: z.array(z.string()).describe("A list of distinct areas for improvement."),
+  recommendations: z.object({
+    individual: z.string(),
+    assignment: z.string(),
+    training: z.string()
+  })
 });
 
 export async function runPhase3Generation(reportId: string, userId: string, job: Job) {
@@ -197,10 +201,14 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     *** OUTPUT REQUIREMENT ***
     Return a JSON object:
     {
-      "overview": "Narrative blending strengths and weaknesses to show uniqueness.",
-      "strengths": "Overall strengths.",
-      "weaknesses": "Overall weaknesses.",
-      "recommendations": "Overall recommendations."
+      "overview": "Narrative blending strengths and weaknesses...",
+      "strengths": ["Strength 1", "Strength 2", "Strength 3"],
+      "weaknesses": ["Weakness 1", "Weakness 2", "Weakness 3"],
+      "recommendations": {
+          "individual": "markdown list",
+          "assignment": "markdown list",
+          "training": "markdown list"
+      }
     }
     `;
 
@@ -245,9 +253,13 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     You MUST use these exact lowercase keys:
     {
       "overview": "...",
-      "strengths": "...",
-      "weaknesses": "...",
-      "recommendations": "..."
+      "strengths": ["...", "..."],
+      "weaknesses": ["...", "..."],
+      "recommendations": {
+          "individual": "...",
+          "assignment": "...",
+          "training": "..."
+      }
     }
     `;
 
@@ -271,12 +283,24 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     // If AI used capitalized keys despite instructions, map them to lowercase
     const normalizedJson = {
         overview: finalJson.overview || finalJson.Overview || "",
-        strengths: finalJson.strengths || finalJson.Strengths || "",
-        weaknesses: finalJson.weaknesses || finalJson.Weaknesses || "",
-        recommendations: finalJson.recommendations || finalJson.Recommendations || ""
+        strengths: Array.isArray(finalJson.strengths) ? finalJson.strengths : (finalJson.strengths ? [finalJson.strengths] : []),
+        weaknesses: Array.isArray(finalJson.weaknesses) ? finalJson.weaknesses : (finalJson.weaknesses ? [finalJson.weaknesses] : []),
+        recommendations: finalJson.recommendations || { 
+            individual: "No data", 
+            assignment: "No data", 
+            training: "No data" 
+        }
     };
 
     const result = SummarySchema.parse(normalizedJson);
+
+    const formattedStrengths = result.strengths.map((s: string) => `- ${s}`).join('\n');
+    const formattedWeaknesses = result.weaknesses.map((w: string) => `- ${w}`).join('\n');
+
+    const formattedRecommendations = 
+      `**Individual Development:**\n${result.recommendations.individual}\n\n` +
+      `**Assignment:**\n${result.recommendations.assignment}\n\n` +
+      `**Training:**\n${result.recommendations.training}`;
 
     // 3. Save to DB
     await client.query('BEGIN');
@@ -284,7 +308,7 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     await client.query(
       `INSERT INTO executive_summary (report_id, overview, strengths, areas_for_improvement, recommendations, ai_log_id)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [reportId, result.overview, result.strengths, result.weaknesses, result.recommendations, critiqueLogId]
+      [reportId, result.overview, formattedStrengths, formattedWeaknesses, formattedRecommendations, critiqueLogId]
     );
     await client.query("UPDATE reports SET status = 'COMPLETED', active_phase = NULL WHERE id = $1", [reportId]);
     await client.query('COMMIT');
