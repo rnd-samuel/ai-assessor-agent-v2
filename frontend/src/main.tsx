@@ -9,7 +9,5 @@ import { useUserStore } from './state/userStore.ts';
 useUserStore.getState().initialize();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
     <App />
-  </React.StrictMode>,
 )

@@ -69,13 +69,15 @@ return (
 
         <div className="flex gap-2">
           {reportStatus === 'FAILED' && !isViewOnly && !isProcessing && (
-            <button 
+            <LoadingButton
               onClick={onGenerate} 
+              isLoading={isGenerating}
+              loadingText="Retrying..."
               className="bg-gradient-to-r from-indigo-500 to-purple-600 border-none hover:from-indigo-600 hover:to-purple-700 text-white shadow-sm"
+              icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
-              Retry Regeneration
-            </button>
+              Retry AI generation
+            </LoadingButton>
           )}
         </div>
       </div>
@@ -105,7 +107,7 @@ return (
           <div className="relative group bg-bg-light p-4 rounded-lg shadow-sm border border-border">
             <div className="flex justify-between items-center mb-2">
               <label className="text-base font-semibold text-text-primary">Summary Narrative</label>
-              {!isViewOnly && (
+              {!isViewOnly && askAiEnabled && (
                 <button
                   onClick={() => onAskAI('Refine Narrative', data?.overview || '', (t) => handleChange('overview', t))}
                   className="p-1.5 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
