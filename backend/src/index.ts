@@ -8,11 +8,9 @@ import { createClient } from 'redis';
 import { setupQueue, aiGenerationQueue, aiGenerationQueueEvents } from './services/queue';
 import { setupSocket, getIO } from './services/socket';
 import authRoutes from './routes/auth.routes';
-import { authenticateToken, authorizeRole } from './middleware/auth.middleware';
 import projectsRoutes from './routes/projects.routes';
 import reportsRoutes from './routes/reports.routes';
 import adminRoutes from './routes/admin.routes';
-import './worker';
 
 import { Job } from 'bullmq';
 

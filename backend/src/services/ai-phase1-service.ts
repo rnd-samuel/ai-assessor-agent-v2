@@ -138,7 +138,7 @@ export async function runPhase1Generation(reportId: string, userId: string, job:
          cd.content as dictionary, 
          pp.persona_prompt, 
          pp.evidence_prompt,
-         pp.general_context as project_brief
+         pp.general_context as project_brief,
          p.context_guide as project_kb
        FROM projects p
        JOIN competency_dictionaries cd ON p.dictionary_id = cd.id

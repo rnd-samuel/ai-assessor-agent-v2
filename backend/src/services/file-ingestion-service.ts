@@ -66,7 +66,17 @@ async function embedAndSave(
         else if (targetColumn === 'global_file_id') tableName = 'global_simulation_files';
 
         if (tableName) {
-          await client.query(`UPDATE ${tableName} SET extracted_text = $1 WHERE id = $2`, [text, fileId]);
+          const updateResult = await client.query(
+            `UPDATE ${tableName} SET extracted_text = $1 WHERE id = $2`, 
+            [text, fileId]
+          );
+
+          // ADD THIS BLOCK
+          if (updateResult.rowCount === 0) {
+            console.error(`[Ingestion] File record ${fileId} not found in ${tableName}. Transaction might not be committed yet.`);
+            // Throwing an error ensures the job fails and can automatically retry later
+            throw new Error(`Record not found in ${tableName} for ID ${fileId}`);
+          }
         }
 
         // B. Clear old chunks

@@ -1,13 +1,12 @@
 // backend/src/routes/reports.routes.ts
 import { Router, Request } from 'express';
 import { authenticateToken, authorizeRole } from '../middleware/auth.middleware';
-import { query } from '../services/db';
+import { query, pool } from '../services/db';
 import { aiGenerationQueue, fileIngestionQueue } from '../services/queue';
 import { uploadToGCS } from '../services/storage';
 import { generateReportDocx } from '../services/document-service';
 import multer from 'multer';
 import crypto from 'crypto';
-const officeParser = require('officeparser');
 
 // Configure multer to store files in memory as buffers
 const storage = multer.memoryStorage();
@@ -88,7 +87,11 @@ router.post('/:id/upload', authenticateToken, upload.single('file'), async (req:
 
   if (!file || !simulationMethod) return res.status(400).send({ message: 'File or method missing.' });
 
+  const client = await pool.connect();
+
   try {
+    await client.query('BEGIN');
+    
     // 1. Hash Check
     const fileHash = calculateHash(file.buffer);
     const dupCheck = await query(
@@ -112,6 +115,8 @@ router.post('/:id/upload', authenticateToken, upload.single('file'), async (req:
     
     const newFileId = dbResult.rows[0].id;
 
+    await client.query('COMMIT');
+
     // 4. Queue for Ingestion (Chunking + Embedding)
     await fileIngestionQueue.add('process-report-file', {
         fileId: newFileId,
@@ -126,6 +131,8 @@ router.post('/:id/upload', authenticateToken, upload.single('file'), async (req:
   } catch (error) {
     console.error('Report upload failed', error);
     res.status(500).send({ message: 'Internal server error.' });
+  } finally {
+    client.release();
   }
 });
 
