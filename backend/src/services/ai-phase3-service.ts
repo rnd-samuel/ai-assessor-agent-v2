@@ -150,8 +150,15 @@ export async function runPhase3Generation(reportId: string, userId: string, job:
     const specificContext = reportRes.rows[0].specific_context || "";
 
     const projectRes = await query(
-      `SELECT pp.summary_prompt, pp.summary_critique_prompt, pp.persona_prompt, pp.general_context, p.context_guide as project_kb 
-       FROM project_prompts pp WHERE pp.project_id = $1`,
+      `SELECT
+       pp.summary_prompt, 
+       pp.summary_critique_prompt, 
+       pp.persona_prompt, 
+       pp.general_context, 
+       p.context_guide as project_kb 
+       FROM project_prompts pp 
+       JOIN projects p ON pp.project_id = p.id
+       WHERE pp.project_id = $1`,
       [projectId]
     );
     const { summary_prompt, summary_critique_prompt, persona_prompt, general_context, project_kb } = projectRes.rows[0];
