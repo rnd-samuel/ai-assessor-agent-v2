@@ -4,6 +4,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { query } from '../services/db';
 import { v4 as uuidv4 } from 'uuid';
+import { sendResetPasswordEmail } from '../services/email-service';
 
 const router = Router();
 
@@ -102,26 +103,37 @@ router.post('/forgot-password', async (req, res) => {
 
   try {
     const result = await query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
+    
+    // Security Best Practice: Always return the same generic message even if email isn't found
+    // to prevent email enumeration attacks.
+    const genericResponse = { message: "If an account exists, a reset link has been sent." };
+
     if (result.rows.length > 0) {
       const user = result.rows[0];
       const resetToken = uuidv4();
-      // Expires in 1 hour
-      const expiry = new Date(Date.now() + 3600000); 
+      const expiry = new Date(Date.now() + 3600000); // 1 hour
 
-      // Save token to DB
+      // 1. Save token to DB
       await query(
         "UPDATE users SET reset_token = $1, reset_token_expiry = $2 WHERE id = $3",
         [resetToken, expiry.toISOString(), user.id]
       );
 
-      // MOCK EMAIL SENDING
-      console.log(`\n[AUTH] ---------------------------------------------------`);
-      console.log(`[AUTH] Password reset requested for: ${email}`);
-      console.log(`[AUTH] Link: http://localhost:5173/reset-password?token=${resetToken}`);
-      console.log(`[AUTH] ---------------------------------------------------\n`);
+      // 2. Send Real Email
+      // Note: We don't await this if we want to return fast, but for critical auth flows, 
+      // awaiting ensures we know if the email service is down.
+      const emailSent = await sendResetPasswordEmail(email, resetToken);
+
+      if (!emailSent) {
+        // If email fails, we might want to alert the user or log it as a critical error
+        // But we still return 200 to the frontend to avoid leaking system state,
+        // while logging the error on the backend (handled in the service).
+        console.error(`[Auth] Critical: Failed to send reset email to ${email}`);
+      }
     }
 
-    res.send({ message: "If an account exists, a reset link has been sent." });
+    res.send(genericResponse);
+
   } catch (error) {
     console.error("Forgot password error:", error);
     res.status(500).send({ message: "Internal server error" });
