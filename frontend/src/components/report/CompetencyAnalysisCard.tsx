@@ -282,7 +282,7 @@ export default function CompetencyAnalysisCard({
         <div className="relative group pt-4 border-t border-border">
             <div className="flex justify-between items-center mb-1">
                 <label className="text-sm font-medium text-text-primary">Development Recommendations</label>
-                {!isViewOnly && (
+                {!isViewOnly && askAiEnabled && (
                     <button
                         onClick={() => onAskAI('Refine recommendations', recommendation, (t) => { setRecommendation(t); handleUpdate({ developmentRecommendations: t }); })}
                         className="p-1 bg-primary/10 text-primary rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-primary/20"
