@@ -768,7 +768,7 @@ export default function ReportPage() {
   };
 
   // (RP-7.11) Trigger Phase 2
-  const handleGeneratePhase2 = async () => {
+  const handleGeneratePhase2 = async (shouldReset: boolean = false) => {
     if (isDirty) {
       addToast("Please save your changes before generating the analysis.", 'error');
       return;
@@ -778,10 +778,16 @@ export default function ReportPage() {
     try {
       // Optimistic Update: Immediately set status to PROCESSING
       // This prevents the "Resume" button from staying clickable while waiting for sockets
-      setReportData(prev => prev ? { ...prev, status: 'PROCESSING' } : null);
+      setReportData(prev => prev ? { ...prev, status: 'PROCESSING', activePhase: 2 } : null);
+
+      setIsThinking(true); 
+      setStreamLog('Initializing analysis...');
+
       // 1. Call the new endpoint to start the job
-      await apiService.post(`/reports/${reportId}/generate/phase2`);
-      addToast("Phase 2 analysis started...", 'info');
+      await apiService.post(`/reports/${reportId}/generate/phase2`, {
+          reset: shouldReset 
+      });
+      addToast(shouldReset ? "Generating new analysis..." : "Resuming analysis...", 'info');
       // 2. Reveal the next tab (UI Logic)
       // In a real app with sockets, we might wait for the 'complete' event.
       // For now, we switch immediately to show the "Processing" or empty state.
@@ -792,6 +798,7 @@ export default function ReportPage() {
       console.error(error);
       // Revert status if the API call itself fails (e.g., 400 Bad Request)
       setReportData(prev => prev ? { ...prev, status: 'FAILED' } : null);
+      setIsThinking(false);
 
       if (error.response && error.response.status === 400) {
         addToast(error.response.data.message, 'error');
@@ -809,7 +816,10 @@ export default function ReportPage() {
     if (!reportId) return;
     try {
       //Optimistic Update
-      setReportData(prev => prev ? { ...prev, status: 'PROCESSING' } : null);
+      setReportData(prev => prev ? { ...prev, status: 'PROCESSING', activePhase: 3 } : null);
+
+      setIsThinking(true);
+      setStreamLog('Initializing summary generation...');
 
       setHighestPhaseVisible('summary');
       setAnalysisTab('summary');
@@ -821,6 +831,7 @@ export default function ReportPage() {
       console.error(error);
       // Revert status on error
       setReportData(prev => prev ? { ...prev, status: 'COMPLETED' } : null);
+      setIsThinking(false);
       if (error.response && error.response.status === 400) {
         addToast(error.response.data.message, 'error');
       } else {
@@ -1077,7 +1088,7 @@ const blocker = useBlocker(
                         reportStatus={reportData?.status || 'CREATED'}
                         processingPhase={reportData?.activePhase}
                         onGeneratePhase1={handleGeneratePhase1}
-                        onGenerateNext={handleGeneratePhase2}
+                        onGenerateNext={() => handleGeneratePhase2(true)}
                         onReset={handleReset}
                         targetPhase={reportData?.targetPhase || 1}
                         isThinking={isThinking}
@@ -1101,7 +1112,7 @@ const blocker = useBlocker(
                           }
                         }}
                         onReset={handleReset}
-                        onResume={handleGeneratePhase2}
+                        onResume={() => handleGeneratePhase2(false)}
                         targetLevelsMap={nameToTargetLevelMap}
                         onHighlightEvidence={handleQuoteSelection}
                         onAskAI={handleAskAI}
@@ -1114,6 +1125,7 @@ const blocker = useBlocker(
                           setCompetencyData(newData);
                           setIsDirty(true);
                         }}
+                        isThinking={isThinking}
                     />
                 )}
 

@@ -19,6 +19,7 @@ interface CompetencyAnalysisListProps {
   processingPhase?: number | null;
   targetLevelsMap: Record<string, string>;
   askAiEnabled?: boolean;
+  isThinking: boolean;
 }
 
 export default function CompetencyAnalysisList({
@@ -34,7 +35,8 @@ export default function CompetencyAnalysisList({
   reportStatus,
   processingPhase,
   targetLevelsMap,
-  askAiEnabled
+  askAiEnabled,
+  isThinking
 }: CompetencyAnalysisListProps) {
   
   // Filters
@@ -181,6 +183,7 @@ export default function CompetencyAnalysisList({
           <LoadingButton
             onClick={handleResume}
             isLoading={isResuming}
+            disabled={isThinking}
             loadingText="Resuming..."
             className="bg-primary text-white hover:bg-primary-hover shadow-sm"
             icon={<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>}
@@ -193,6 +196,7 @@ export default function CompetencyAnalysisList({
           <LoadingButton
             onClick={handleGenerateSummary}
             isLoading={isGenerating}
+            disabled={isThinking}
             loadingText="Generating..."
             className="flex items-center gap-2"
           >

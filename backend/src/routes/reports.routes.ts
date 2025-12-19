@@ -635,6 +635,7 @@ router.post('/:id/generate/phase1', authenticateToken, async (req: Authenticated
  */
 router.post('/:id/generate/phase2', authenticateToken, async (req: AuthenticatedRequest, res) => {
   const { id: reportId } = req.params;
+  const { reset } = req.body || {};
   const userId = req.user?.userId;
 
   try {
@@ -645,6 +646,14 @@ router.post('/:id/generate/phase2', authenticateToken, async (req: Authenticated
 
     if ((check.rowCount || 0) === 0) {
       return res.status(400).send({ message: "Cannot generate analysis: No evidence collected yet." })
+    }
+
+    if (reset === true) {
+        console.log(`[API] Resetting Phase 2 data for report ${reportId}...`);
+        // Clear previous analysis to force re-evaluation of ALL competencies
+        await query('DELETE FROM competency_analysis WHERE report_id = $1', [reportId]);
+        // Clear Phase 3 too, since it depends on Phase 2
+        await query('DELETE FROM executive_summary WHERE report_id = $1', [reportId]);
     }
 
     // SAFETY CHECK: Look for zombie jobs (The Defense-in-Depth Pattern)

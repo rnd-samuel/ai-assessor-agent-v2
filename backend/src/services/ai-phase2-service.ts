@@ -478,7 +478,7 @@ async function evaluateKeyBehaviors(
     }
 
     const evidenceListText = allRelevantEvidence.map((e: any) => 
-        `SOURCE [${e.source}] (ID:${e.id}): "${e.quote}"\n   Context: ${e.reasoning}`
+        `[Level: ${e.level}] SOURCE [${e.source}] (ID:${e.id}): "${e.quote}"\n   Context: ${e.reasoning}`
     ).join('\n\n');
 
     // FIX: Explicitly appending the JSON schema structure to the prompt

@@ -7,6 +7,9 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 // 2. Create a re-usable 'axios' instance
 export const apiService = axios.create({
   baseURL: API_URL,
+  headers: {
+    'Content-Type': 'application/json', // <--- ADD THIS DEFAULT
+  },
 });
 
 // 3. (FIXED) Set up a "request interceptor"
@@ -21,6 +24,12 @@ apiService.interceptors.request.use(
       // If the token exists, add it to the header
       config.headers.Authorization = `Bearer ${token}`;
     }
+
+    // Safety Check: Ensure Content-Type is set for POST/PUT if not FormData
+    if (config.data && !(config.data instanceof FormData)) {
+        config.headers['Content-Type'] = 'application/json';
+    }
+    
     return config;
   },
   (error) => {
