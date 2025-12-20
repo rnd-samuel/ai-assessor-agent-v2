@@ -353,7 +353,7 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
         const linkRes = await query(
           `SELECT l.kb_analysis_id, e.quote, e.source
            FROM analysis_evidence_links l
-           JOIN evidence e ON l.evidence_id = e.id
+           JOIN evidence e ON l.evidence_id = e.id AND e.is_archived = false
            WHERE l.kb_analysis_id = ANY($1::uuid[])`,
           [kbIds]
         );
@@ -521,6 +521,9 @@ router.delete('/evidence/:evidenceId', authenticateToken, async (req: Authentica
       [evidenceId]
     );
 
+    // 3. Remove any lingering analysis links
+    await query('DELETE FROM analysis_evidence_links WHERE evidence_id = $1', [evidenceId]);
+
     res.status(200).send({ message: 'Evidence deleted successfully.' });
 
   } catch (error) {
@@ -558,9 +561,16 @@ router.post('/evidence/bulk-archive', authenticateToken, async (req: Authenticat
         return res.status(403).send({ message: "No applicable evidence found or unauthorized." });
     }
 
+    const archivedIds = result.rows.map(r => r.id);
+
+    // Remove any lingering analysis links for the archived evidence
+    if (archivedIds.length > 0) {
+      await query('DELETE FROM analysis_evidence_links WHERE evidence_id = ANY($1::uuid[])', [archivedIds]);
+    }
+
     res.status(200).send({ 
         message: `Successfully archived ${result.rowCount} evidence items.`,
-        archivedIds: result.rows.map(r => r.id)
+        archivedIds
     });
 
   } catch (error) {
