@@ -56,10 +56,10 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
     }
 
     const result = await query(
-        `INSERT INTO reports (title, project_id, creator_id, target_levels, specific_context, status)
+      `INSERT INTO reports (title, project_id, creator_id, target_levels, specific_context, status)
         VALUES ($1, $2, $3, $4, $5, 'CREATED')
         RETURNING id`,
-        [title, projectId, creatorId, JSON.stringify(targetLevels), specificContext]
+      [title, projectId, creatorId, JSON.stringify(targetLevels), specificContext]
     );
 
     res.status(201).json({
@@ -69,7 +69,7 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
 
   } catch (error: any) {
     if (error.code === '23505') {
-        return res.status(409).send({ message: "Report title must be unique in this project." });
+      return res.status(409).send({ message: "Report title must be unique in this project." });
     }
     console.error("Error creating report:", error);
     res.status(500).send({ message: "Internal server error" });
@@ -91,7 +91,7 @@ router.post('/:id/upload', authenticateToken, upload.single('file'), async (req:
 
   try {
     await client.query('BEGIN');
-    
+
     // 1. Hash Check
     const fileHash = calculateHash(file.buffer);
     const dupCheck = await query(
@@ -112,17 +112,17 @@ router.post('/:id/upload', authenticateToken, upload.single('file'), async (req:
        RETURNING id`,
       [reportId, file.originalname, gcsPath, simulationMethod, fileHash]
     );
-    
+
     const newFileId = dbResult.rows[0].id;
 
     await client.query('COMMIT');
 
     // 4. Queue for Ingestion (Chunking + Embedding)
     await fileIngestionQueue.add('process-report-file', {
-        fileId: newFileId,
-        gcsPath: gcsPath,
-        reportId: reportId,
-        userId: userId
+      fileId: newFileId,
+      gcsPath: gcsPath,
+      reportId: reportId,
+      userId: userId
     });
     console.log(`[Upload] Queued report file ${newFileId} for embedding.`);
 
@@ -240,18 +240,18 @@ router.delete('/:id', authenticateToken, authorizeRole('Admin'), async (req: Aut
   try {
     // 1. Safety Check
     const check = await query('SELECT is_archived FROM reports WHERE id = $1', [id]);
-    
+
     if (check.rows.length === 0) {
       return res.status(404).send({ message: "Report not found." });
     }
-    
+
     if (!check.rows[0].is_archived) {
       return res.status(400).send({ message: "Cannot delete an active report. Archive it first." });
     }
 
     // 2. Perform Delete
     await query('DELETE FROM reports WHERE id = $1', [id]);
-    
+
     res.send({ message: "Report permanently deleted." });
 
   } catch (error) {
@@ -324,9 +324,9 @@ router.get('/:id/data', authenticateToken, async (req: AuthenticatedRequest, res
     );
 
     const rawFiles = filesResult.rows.map(f => ({
-        ...f,
-        // Fallback if text hasn't been processed yet
-        file_content: f.file_content || "(Processing text... please refresh in a moment)"
+      ...f,
+      // Fallback if text hasn't been processed yet
+      file_content: f.file_content || "(Processing text... please refresh in a moment)"
     }));
 
     // 6. Fetch Analysis & Summary
@@ -558,7 +558,7 @@ router.post('/evidence/bulk-archive', authenticateToken, async (req: Authenticat
     );
 
     if (result.rowCount === 0) {
-        return res.status(403).send({ message: "No applicable evidence found or unauthorized." });
+      return res.status(403).send({ message: "No applicable evidence found or unauthorized." });
     }
 
     const archivedIds = result.rows.map(r => r.id);
@@ -568,9 +568,9 @@ router.post('/evidence/bulk-archive', authenticateToken, async (req: Authenticat
       await query('DELETE FROM analysis_evidence_links WHERE evidence_id = ANY($1::uuid[])', [archivedIds]);
     }
 
-    res.status(200).send({ 
-        message: `Successfully archived ${result.rowCount} evidence items.`,
-        archivedIds
+    res.status(200).send({
+      message: `Successfully archived ${result.rowCount} evidence items.`,
+      archivedIds
     });
 
   } catch (error) {
@@ -599,7 +599,7 @@ router.post('/:id/generate/phase1', authenticateToken, async (req: Authenticated
         if (oldJob) {
           // Attempt to remove it (works if waiting/delayed/failed)
           // If it's 'active', this might throw or fail, which is fine (the DB check will kill it)
-          await oldJob.remove(); 
+          await oldJob.remove();
           console.log(`[API] Successfully removed stale job ${previousJobId} from queue.`);
         }
       } catch (err) {
@@ -659,11 +659,11 @@ router.post('/:id/generate/phase2', authenticateToken, async (req: Authenticated
     }
 
     if (reset === true) {
-        console.log(`[API] Resetting Phase 2 data for report ${reportId}...`);
-        // Clear previous analysis to force re-evaluation of ALL competencies
-        await query('DELETE FROM competency_analysis WHERE report_id = $1', [reportId]);
-        // Clear Phase 3 too, since it depends on Phase 2
-        await query('DELETE FROM executive_summary WHERE report_id = $1', [reportId]);
+      console.log(`[API] Resetting Phase 2 data for report ${reportId}...`);
+      // Clear previous analysis to force re-evaluation of ALL competencies
+      await query('DELETE FROM competency_analysis WHERE report_id = $1', [reportId]);
+      // Clear Phase 3 too, since it depends on Phase 2
+      await query('DELETE FROM executive_summary WHERE report_id = $1', [reportId]);
     }
 
     // SAFETY CHECK: Look for zombie jobs (The Defense-in-Depth Pattern)
@@ -737,7 +737,7 @@ router.post('/:id/generate/phase3', authenticateToken, async (req: Authenticated
     // Validation: Ensure Phase 2 is done (optional but good practice)
     const check = await query('SELECT 1 FROM competency_analysis WHERE report_id = $1 LIMIT 1', [reportId]);
     if ((check.rowCount || 0) === 0) {
-        return res.status(400).send({ message: "Cannot generate summary: Competency analysis (Phase 2) is missing." });
+      return res.status(400).send({ message: "Cannot generate summary: Competency analysis (Phase 2) is missing." });
     }
 
     // SAFETY CHECK: Look for zombie jobs
@@ -806,22 +806,64 @@ router.get('/:id/summary', authenticateToken, async (req: AuthenticatedRequest, 
  * (RP-7.13) Ask AI / Refine Text
  */
 router.post('/:id/refine', authenticateToken, async (req: AuthenticatedRequest, res) => {
-  const { prompt, currentText, context } = req.body;
+  const { id: reportId } = req.params;
+  const userId = req.user?.userId;
+  const {
+    userInstruction,
+    currentContent,
+    contextType,
+    // Phase 2 context
+    competencyName,
+    competencyLevel,
+    competencyDefinition,
+    levelDescriptions,
+    // Phase 3 context
+    generalContext,
+    specificContext
+  } = req.body;
+
+  if (!userInstruction || !currentContent) {
+    return res.status(400).send({ message: "Missing required fields: userInstruction and currentContent." });
+  }
 
   try {
-    // Mock AI Delay
-    await new Promise(r => setTimeout(r, 2000));
+    // Import dynamically to avoid circular dependencies
+    const { runAskAi } = await import('../services/ai-ask-service');
 
-    // Mock Logic: Just append something to show it worked
-    const refinedText = `${currentText}\n\n[AI Refined based on: "${prompt}"]`;
+    // Fetch projectId from report
+    const reportRes = await query('SELECT project_id FROM reports WHERE id = $1', [reportId]);
+    if (reportRes.rows.length === 0) {
+      return res.status(404).send({ message: "Report not found." });
+    }
+    const projectId = reportRes.rows[0].project_id;
+
+    const result = await runAskAi({
+      reportId,
+      userId: userId || '',
+      projectId,
+      userInstruction,
+      currentContent,
+      contextType: contextType || 'PHASE_2',
+      competencyName,
+      competencyLevel,
+      competencyDefinition,
+      levelDescriptions,
+      generalContext,
+      specificContext
+    });
+
+    if (!result.success) {
+      return res.status(400).send({ message: result.error });
+    }
 
     res.json({
-      refinedText,
-      reasoning: "I have updated the text to address your request for clarity."
+      refinedText: result.refinedContent,
+      reasoning: result.reasoning,
+      aiLogId: result.aiLogId
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Ask AI failed:", error);
-    res.status(500).send({ message: "Internal server error" });
+    res.status(500).send({ message: error.message || "Internal server error" });
   }
 });
 
@@ -848,27 +890,27 @@ router.put('/:id/content', authenticateToken, async (req: AuthenticatedRequest, 
              SET level_achieved = $1, explanation = $2, development_recommendations = $3, updated_at = NOW()
              WHERE id = $4 AND report_id = $5`,
             [
-                item.levelAchieved, 
-                item.explanation, 
-                item.developmentRecommendations, 
-                item.id, 
-                reportId
+              item.levelAchieved,
+              item.explanation,
+              item.developmentRecommendations,
+              item.id,
+              reportId
             ]
           );
 
           // B. Update Child Key Behaviors (if present)
           const keyBehaviors = item.keyBehaviors || item.key_behaviors_status; // Handle both prop names
           if (Array.isArray(keyBehaviors)) {
-             for (const kb of keyBehaviors) {
-                 if (kb.id) {
-                     await query(
-                         `UPDATE analysis_key_behaviors
+            for (const kb of keyBehaviors) {
+              if (kb.id) {
+                await query(
+                  `UPDATE analysis_key_behaviors
                           SET status = $1, reasoning = $2
                           WHERE id = $3 AND analysis_id = $4`,
-                         [kb.status, kb.reasoning, kb.id, item.id]
-                     );
-                 }
-             }
+                  [kb.status, kb.reasoning, kb.id, item.id]
+                );
+              }
+            }
           }
         }
       }
@@ -877,10 +919,10 @@ router.put('/:id/content', authenticateToken, async (req: AuthenticatedRequest, 
     // 3. Save Summary
     if (executiveSummary) {
       const check = await query('SELECT id FROM executive_summary WHERE report_id = $1', [reportId]);
-      const hasContent = 
+      const hasContent =
         (executiveSummary.overview && executiveSummary.overview.trim().length > 0) ||
-        (executiveSummary.strengths && executiveSummary.strengths.trim().length > 0) || 
-        (executiveSummary.areas_for_improvement && executiveSummary.areas_for_improvement.trim().length > 0) || 
+        (executiveSummary.strengths && executiveSummary.strengths.trim().length > 0) ||
+        (executiveSummary.areas_for_improvement && executiveSummary.areas_for_improvement.trim().length > 0) ||
         (executiveSummary.recommendations && executiveSummary.recommendations.trim().length > 0);
 
       if (check.rows.length > 0) {
@@ -891,7 +933,7 @@ router.put('/:id/content', authenticateToken, async (req: AuthenticatedRequest, 
           [executiveSummary.overview, executiveSummary.strengths, executiveSummary.areas_for_improvement, executiveSummary.recommendations, reportId]
         );
       } else if (hasContent) {
-         await query(
+        await query(
           `INSERT INTO executive_summary (report_id, overview, strengths, areas_for_improvement, recommendations)
            VALUES ($1, $2, $3, $4, $5)`,
           [reportId, executiveSummary.overview, executiveSummary.strengths, executiveSummary.areas_for_improvement, executiveSummary.recommendations]
@@ -914,7 +956,7 @@ router.get('/:id/export', authenticateToken, async (req: AuthenticatedRequest, r
   const { id: reportId } = req.params;
   try {
     const { buffer, filename } = await generateReportDocx(reportId);
-    
+
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.send(buffer);
@@ -923,7 +965,7 @@ router.get('/:id/export', authenticateToken, async (req: AuthenticatedRequest, r
     console.error("Export failed:", error);
     // Send friendly error if validation failed
     if (error.message.includes("Cannot export")) {
-        return res.status(400).send({ message: error.message });
+      return res.status(400).send({ message: error.message });
     }
     res.status(500).send({ message: "Internal server error during export." });
   }
@@ -971,13 +1013,13 @@ router.post('/:id/repair-evidence', authenticateToken, async (req: Authenticated
        WHERE report_id = $1`,
       [reportId]
     );
-    
+
     let updatedCount = 0;
 
     // 3. Iterate and Inject
     for (const row of analysisRes.rows) {
       let keyBehaviors = row.key_behaviors_status;
-      
+
       // Handle case where it might be a string (depending on pg driver config)
       if (typeof keyBehaviors === 'string') {
         keyBehaviors = JSON.parse(keyBehaviors);
@@ -988,7 +1030,7 @@ router.post('/:id/repair-evidence', authenticateToken, async (req: Authenticated
       let hasChanges = false;
 
       // Filter evidence for THIS competency only to reduce noise
-      const compEvidence = allEvidence.filter(e => 
+      const compEvidence = allEvidence.filter(e =>
         e.competency.toLowerCase() === row.competency.toLowerCase()
       );
 
@@ -1000,19 +1042,19 @@ router.post('/:id/repair-evidence', authenticateToken, async (req: Authenticated
 
         // FIND MATCHES
         const matches = compEvidence.filter(ev => {
-            const evKbNormalized = normalizeKb(ev.kb);
-            // Fuzzy check: Exact match OR containment
-            return evKbNormalized === kbTextNormalized || 
-                   (kbTextNormalized.length > 10 && evKbNormalized.includes(kbTextNormalized)) ||
-                   (evKbNormalized.length > 10 && kbTextNormalized.includes(evKbNormalized));
+          const evKbNormalized = normalizeKb(ev.kb);
+          // Fuzzy check: Exact match OR containment
+          return evKbNormalized === kbTextNormalized ||
+            (kbTextNormalized.length > 10 && evKbNormalized.includes(kbTextNormalized)) ||
+            (evKbNormalized.length > 10 && kbTextNormalized.includes(evKbNormalized));
         }).map(ev => ({
-            quote: ev.quote,
-            source: ev.source
+          quote: ev.quote,
+          source: ev.source
         }));
 
         if (matches.length > 0) {
-            hasChanges = true;
-            return { ...kbItem, evidence: matches };
+          hasChanges = true;
+          return { ...kbItem, evidence: matches };
         }
         return kbItem;
       });
@@ -1029,9 +1071,9 @@ router.post('/:id/repair-evidence', authenticateToken, async (req: Authenticated
       }
     }
 
-    res.json({ 
-        message: `Repaired evidence for ${updatedCount} competency cards.`, 
-        totalMatches: allEvidence.length 
+    res.json({
+      message: `Repaired evidence for ${updatedCount} competency cards.`,
+      totalMatches: allEvidence.length
     });
 
   } catch (error) {

@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Assessor Agent - Design System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* A little bit of custom CSS for specific component states not easily handled by pure Tailwind */
+        .component-section {
+            padding-top: 4rem; /* Offset for sticky nav */
+            margin-top: -2rem;
+        }
+    </style>
+    <script>
+        // Configure Tailwind CSS with the custom design tokens
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: {
+                            DEFAULT: '#068c81',
+                            hover: '#057a70',
+                            active: '#046860',
+                        },
+                        'text-primary': '#111827',
+                        'text-secondary': '#4b5563',
+                        'text-muted': '#6b7280',
+                        'bg-light': '#ffffff',
+                        'bg-medium': '#f3f4f6',
+                        border: '#d1d5db',
+                        success: '#10b981',
+                        warning: '#f59e0b',
+                        error: '#ef4444',
+                        info: '#3b82f6',
+                    },
+                    borderRadius: {
+                        'sm': '4px',
+                        'md': '8px',
+                        'lg': '16px',
+                    },
+                    boxShadow: {
+                        'sm': '0 1px 2px 0 rgb(0 0 0 / 0.05)',
+                        'md': '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)',
+                        'lg': '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-bg-medium font-sans text-text-secondary">
+
+    <!-- Main Container -->
+    <div class="flex">
+
+        <!-- Sticky Sidebar Navigation -->
+        <aside class="w-60 h-screen sticky top-0 bg-bg-light border-r border-border p-6 flex-shrink-0">
+            <div class="flex items-center gap-3 mb-8">
+                 <div class="w-8 h-8 bg-primary rounded-md flex items-center justify-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
+                 </div>
+                 <h1 class="text-lg font-bold text-text-primary">Design System</h1>
+            </div>
+            <nav class="flex flex-col gap-2">
+                <h2 class="text-sm font-semibold text-text-primary mt-4 mb-2">1. Design Tokens</h2>
+                <a href="#colors" class="text-sm hover:text-primary transition-colors">Colors</a>
+                <a href="#typography" class="text-sm hover:text-primary transition-colors">Typography</a>
+                <a href="#spacing" class="text-sm hover:text-primary transition-colors">Spacing</a>
+                <a href="#radius-shadows" class="text-sm hover:text-primary transition-colors">Radius & Shadows</a>
+
+                <h2 class="text-sm font-semibold text-text-primary mt-4 mb-2">2. Atoms</h2>
+                <a href="#buttons" class="text-sm hover:text-primary transition-colors">Buttons</a>
+                <a href="#inputs" class="text-sm hover:text-primary transition-colors">Input Fields</a>
+                <a href="#checkbox" class="text-sm hover:text-primary transition-colors">Checkbox</a>
+                <a href="#notification" class="text-sm hover:text-primary transition-colors">Notification</a>
+
+                <h2 class="text-sm font-semibold text-text-primary mt-4 mb-2">3. Molecules</h2>
+                 <a href="#search" class="text-sm hover:text-primary transition-colors">Search Bar</a>
+                <a href="#file-uploader" class="text-sm hover:text-primary transition-colors">File Uploader</a>
+                <a href="#table-row" class="text-sm hover:text-primary transition-colors">Table Elements</a>
+
+                <h2 class="text-sm font-semibold text-text-primary mt-4 mb-2">4. Organisms</h2>
+                <a href="#sidebar" class="text-sm hover:text-primary transition-colors">Sidebar</a>
+                <a href="#cards" class="text-sm hover:text-primary transition-colors">Cards</a>
+                <a href="#modal" class="text-sm hover:text-primary transition-colors">Modal</a>
+                <a href="#table" class="text-sm hover:text-primary transition-colors">Table</a>
+                <a href="#date-picker" class="text-sm hover:text-primary transition-colors">Date Picker</a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 p-12 bg-bg-medium/50">
+
+            <!-- Intro Header -->
+            <div class="mb-12">
+                <h1 class="text-3xl font-bold text-text-primary">AI Assessor Agent Component Library</h1>
+                <p class="text-text-secondary mt-2">A comprehensive guide to the visual components and design tokens.</p>
+            </div>
+            
+            <!-- Design Tokens Section -->
+            <section class="component-section" id="tokens">
+                <h2 class="text-2xl font-bold text-text-primary mb-6">1. Design Tokens</h2>
+                
+                <!-- Colors -->
+                <div class="component-section" id="colors">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Colors</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm">
+                        <!-- Primary Colors -->
+                        <p class="text-sm font-medium mb-3">Primary</p>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div class="text-center"><div class="w-full h-20 bg-primary rounded-md shadow-inner"></div><p class="text-xs mt-2">primary (#068c81)</p></div>
+                            <div class="text-center"><div class="w-full h-20 bg-primary-hover rounded-md shadow-inner"></div><p class="text-xs mt-2">primary-hover (#057a70)</p></div>
+                            <div class="text-center"><div class="w-full h-20 bg-primary-active rounded-md shadow-inner"></div><p class="text-xs mt-2">primary-active (#046860)</p></div>
+                        </div>
+                         <!-- Neutral Colors -->
+                        <p class="text-sm font-medium mt-6 mb-3">Neutral</p>
+                         <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                            <div class="text-center"><div class="w-full h-20 bg-text-primary rounded-md shadow-inner"></div><p class="text-xs mt-2">text-primary (#111827)</p></div>
+                            <div class="text-center"><div class="w-full h-20 bg-text-secondary rounded-md shadow-inner"></div><p class="text-xs mt-2">text-secondary (#4b5563)</p></div>
+                             <div class="text-center"><div class="w-full h-20 bg-text-muted rounded-md shadow-inner"></div><p class="text-xs mt-2">text-muted (#6b7280)</p></div>
+                             <div class="text-center"><div class="w-full h-20 bg-bg-light rounded-md shadow-inner border border-border"></div><p class="text-xs mt-2">bg-light (#ffffff)</p></div>
+                            <div class="text-center"><div class="w-full h-20 bg-bg-medium rounded-md shadow-inner"></div><p class="text-xs mt-2">bg-medium (#f3f4f6)</p></div>
+                             <div class="text-center"><div class="w-full h-20 bg-border rounded-md shadow-inner"></div><p class="text-xs mt-2">border (#d1d5db)</p></div>
+                        </div>
+                        <!-- Feedback Colors -->
+                        <p class="text-sm font-medium mt-6 mb-3">Feedback</p>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div class="text-center"><div class="w-full h-20 bg-success rounded-md shadow-inner"></div><p class="text-xs mt-2">success (#10b981)</p></div>
+                            <div class="text-center"><div class="w-full h-20 bg-warning rounded-md shadow-inner"></div><p class="text-xs mt-2">warning (#f59e0b)</p></div>
+                            <div class="text-center"><div class="w-full h-20 bg-error rounded-md shadow-inner"></div><p class="text-xs mt-2">error (#ef4444)</p></div>
+                             <div class="text-center"><div class="w-full h-20 bg-info rounded-md shadow-inner"></div><p class="text-xs mt-2">info (#3b82f6)</p></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Typography -->
+                <div class="component-section" id="typography">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Typography</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm space-y-4">
+                        <p class="font-sans" style="font-size: 30px; font-weight: 700;">H1 Title: The quick brown fox jumps over</p>
+                        <p class="font-sans" style="font-size: 24px; font-weight: 700;">H2 Section: The quick brown fox jumps over</p>
+                        <p class="font-sans" style="font-size: 20px; font-weight: 600;">H3 Card: The quick brown fox jumps over</p>
+                        <p class="font-sans" style="font-size: 16px; font-weight: 400;">Body: The quick brown fox jumps over the lazy dog. This is the default text style for paragraphs and general content.</p>
+                        <p class="font-sans" style="font-size: 14px; font-weight: 400;">Small: The quick brown fox jumps over the lazy dog.</p>
+                        <p class="font-sans" style="font-size: 12px; font-weight: 400;">Caption: The quick brown fox jumps over the lazy dog.</p>
+                    </div>
+                </div>
+
+                <!-- Spacing -->
+                <div class="component-section" id="spacing">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Spacing</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm flex items-end gap-2">
+                        <div class="text-center"><div class="bg-primary/20 h-4" style="width: 4px;"></div><p class="text-xs mt-1">4px</p></div>
+                        <div class="text-center"><div class="bg-primary/20 h-4" style="width: 8px;"></div><p class="text-xs mt-1">8px</p></div>
+                        <div class="text-center"><div class="bg-primary/20 h-4" style="width: 12px;"></div><p class="text-xs mt-1">12px</p></div>
+                        <div class="text-center"><div class="bg-primary/20 h-4" style="width: 16px;"></div><p class="text-xs mt-1">16px</p></div>
+                        <div class="text-center"><div class="bg-primary/20 h-4" style="width: 20px;"></div><p class="text-xs mt-1">20px</p></div>
+                        <div class="text-center"><div class="bg-primary/20 h-4" style="width: 24px;"></div><p class="text-xs mt-1">24px</p></div>
+                        <div class="text-center"><div class="bg-primary/20 h-4" style="width: 32px;"></div><p class="text-xs mt-1">32px</p></div>
+                        <div class="text-center"><div class="bg-primary/20 h-4" style="width: 48px;"></div><p class="text-xs mt-1">48px</p></div>
+                    </div>
+                </div>
+
+                 <!-- Radius & Shadows -->
+                 <div class="component-section" id="radius-shadows">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Border Radius & Shadows</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm grid grid-cols-2 md:grid-cols-4 gap-6">
+                        <div class="text-center"><div class="w-full h-24 bg-bg-light border border-border rounded-sm"></div><p class="text-xs mt-2">rounded-sm (4px)</p></div>
+                        <div class="text-center"><div class="w-full h-24 bg-bg-light border border-border rounded-md"></div><p class="text-xs mt-2">rounded-md (8px)</p></div>
+                        <div class="text-center"><div class="w-full h-24 bg-bg-light border border-border rounded-lg"></div><p class="text-xs mt-2">rounded-lg (16px)</p></div>
+                        <div></div>
+                         <div class="text-center"><div class="w-full h-24 bg-bg-light rounded-md shadow-sm"></div><p class="text-xs mt-2">shadow-sm</p></div>
+                        <div class="text-center"><div class="w-full h-24 bg-bg-light rounded-md shadow-md"></div><p class="text-xs mt-2">shadow-md</p></div>
+                        <div class="text-center"><div class="w-full h-24 bg-bg-light rounded-md shadow-lg"></div><p class="text-xs mt-2">shadow-lg</p></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Atoms Section -->
+            <section class="component-section" id="atoms">
+                <h2 class="text-2xl font-bold text-text-primary mb-6">2. Atoms</h2>
+
+                 <!-- Buttons -->
+                 <div class="component-section" id="buttons">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Buttons</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm space-y-4">
+                        <!-- Primary -->
+                        <div class="flex items-center gap-4 flex-wrap">
+                            <button class="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors">Primary</button>
+                            <button class="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors opacity-50 cursor-not-allowed">Disabled</button>
+                        </div>
+                         <!-- Secondary -->
+                        <div class="flex items-center gap-4 flex-wrap">
+                            <button class="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors">Secondary</button>
+                            <button class="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors opacity-50 cursor-not-allowed">Disabled</button>
+                        </div>
+                         <!-- Destructive -->
+                        <div class="flex items-center gap-4 flex-wrap">
+                            <button class="bg-error text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-red-700 transition-colors">Destructive</button>
+                            <button class="bg-error text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-red-700 transition-colors opacity-50 cursor-not-allowed">Disabled</button>
+                        </div>
+                         <!-- Ghost -->
+                        <div class="flex items-center gap-4 flex-wrap">
+                            <button class="bg-transparent text-text-secondary rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors">Ghost</button>
+                            <button class="bg-transparent text-text-secondary rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors opacity-50 cursor-not-allowed">Disabled</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Inputs -->
+                <div class="component-section" id="inputs">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Input Fields</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="text-sm font-medium mb-1 block">Default</label>
+                            <input type="text" placeholder="Enter your email" class="w-full rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
+                        </div>
+                        <div>
+                            <label class="text-sm font-medium mb-1 block">Focused</label>
+                            <input type="text" placeholder="Enter your email" class="w-full rounded-md border-primary ring-2 ring-primary/50 px-3 py-2 bg-light shadow-sm text-sm">
+                        </div>
+                        <div>
+                            <label class="text-sm font-medium mb-1 block">Error</label>
+                            <input type="text" placeholder="Enter your email" class="w-full rounded-md border-error ring-2 ring-error/50 px-3 py-2 bg-light shadow-sm text-sm">
+                        </div>
+                        <div>
+                            <label class="text-sm font-medium mb-1 block">Disabled</label>
+                            <input type="text" placeholder="Enter your email" class="w-full rounded-md border border-border px-3 py-2 bg-bg-medium shadow-sm text-sm text-muted cursor-not-allowed" disabled>
+                        </div>
+                    </div>
+                </div>
+                
+                 <!-- Checkbox -->
+                 <div class="component-section" id="checkbox">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Checkbox</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm flex items-center gap-8">
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" class="w-4 h-4 rounded-sm border-border accent-primary">
+                            <span class="text-sm">Unchecked</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" class="w-4 h-4 rounded-sm border-border accent-primary" checked>
+                             <span class="text-sm">Checked</span>
+                        </label>
+                         <label class="flex items-center gap-2 cursor-not-allowed opacity-50">
+                            <input type="checkbox" class="w-4 h-4 rounded-sm border-border accent-primary" disabled>
+                             <span class="text-sm">Disabled</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Notification/Toast -->
+                <div class="component-section" id="notification">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Notification / Toast</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm">
+                        <div class="max-w-sm rounded-lg shadow-lg bg-bg-light p-4 flex items-start gap-3">
+                            <div class="w-6 h-6 bg-success rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                            </div>
+                            <div>
+                                <h4 class="text-sm font-semibold text-text-primary">Generation Complete</h4>
+                                <p class="text-sm text-text-secondary mt-1">The AI has finished generating content for the report.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Molecules Section -->
+            <section class="component-section" id="molecules">
+                <h2 class="text-2xl font-bold text-text-primary mb-6">3. Molecules</h2>
+
+                <!-- Search Bar -->
+                 <div class="component-section" id="search">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Search Bar</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm max-w-sm">
+                        <div class="relative">
+                             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-text-muted"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            </div>
+                            <input type="text" placeholder="Search projects..." class="w-full rounded-md border border-border pl-9 pr-3 py-2 bg-light shadow-sm text-sm">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- File Uploader -->
+                <div class="component-section" id="file-uploader">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">File Uploader</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm max-w-lg">
+                        <div class="w-full border-2 border-dashed border-border rounded-lg bg-bg-medium p-8 text-center cursor-pointer hover:border-primary">
+                             <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mx-auto text-text-muted mb-2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                            <p class="text-sm font-semibold text-text-secondary">Click to upload or drag and drop</p>
+                            <p class="text-xs text-text-muted mt-1">PDF, DOCX, or TXT</p>
+                        </div>
+                    </div>
+                </div>
+                
+                 <!-- Table Elements -->
+                <div class="component-section" id="table-row">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Table Elements</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm">
+                         <table class="w-full text-left text-sm">
+                            <thead>
+                                <tr class="border-b border-border">
+                                    <th class="p-3 font-semibold text-text-secondary">Date <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="inline-block ml-1"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg></th>
+                                    <th class="p-3 font-semibold text-text-secondary">Project Name</th>
+                                    <th class="p-3 font-semibold text-text-secondary">No. of Reports</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="border-b border-border hover:bg-bg-medium cursor-pointer">
+                                    <td class="p-3">Oct 21, 2025</td>
+                                    <td class="p-3 font-medium text-text-primary">Q4 Leadership Assessment</td>
+                                    <td class="p-3 text-center">12</td>
+                                </tr>
+                                 <tr class="hover:bg-bg-medium cursor-pointer">
+                                    <td class="p-3">Oct 19, 2025</td>
+                                    <td class="p-3 font-medium text-text-primary">Graduate Trainee Program</td>
+                                    <td class="p-3 text-center">-</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Organisms Section -->
+            <section class="component-section" id="organisms">
+                <h2 class="text-2xl font-bold text-text-primary mb-6">4. Organisms</h2>
+
+                <!-- Sidebar -->
+                <div class="component-section" id="sidebar">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Sidebar</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm">
+                        <div class="flex gap-8">
+                            <!-- Expanded -->
+                            <div class="w-60 h-96 bg-bg-light border border-border rounded-md p-4 flex flex-col">
+                                <div class="flex items-center gap-2 mb-6">
+                                    <div class="w-8 h-8 bg-primary rounded-md"></div>
+                                    <h1 class="font-bold text-text-primary">App Name</h1>
+                                </div>
+                                <nav class="flex flex-col gap-1 text-sm">
+                                    <a href="#" class="flex items-center gap-3 p-2 rounded-md bg-bg-medium text-text-primary font-semibold"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>Projects</a>
+                                    <a href="#" class="flex items-center gap-3 p-2 rounded-md hover:bg-bg-medium"> <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-4.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.88Z"/><path d="M16 2v6h6"/><path d="m15 13-3-3-3 3"/><path d="m12 10 0 6"/></svg>Project Alpha</a>
+                                    <a href="#" class="flex items-center gap-3 p-2 rounded-md hover:bg-bg-medium"> <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-4.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.88Z"/><path d="M16 2v6h6"/><path d="m15 13-3-3-3 3"/><path d="m12 10 0 6"/></svg>Project Beta</a>
+                                </nav>
+                                <div class="mt-auto">
+                                    <a href="#" class="flex items-center gap-3 p-2 rounded-md hover:bg-bg-medium text-sm"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>Log Out</a>
+                                </div>
+                            </div>
+                            <!-- Collapsed -->
+                            <div class="w-16 h-96 bg-bg-light border border-border rounded-md p-2 flex flex-col items-center">
+                                <button class="p-2 rounded-md hover:bg-bg-medium mb-4"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg></button>
+                                <nav class="flex flex-col gap-2">
+                                    <a href="#" class="p-2 rounded-md bg-bg-medium"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></a>
+                                    <a href="#" class="p-2 rounded-md hover:bg-bg-medium"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-4.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.88Z"/><path d="M16 2v6h6"/><path d="m15 13-3-3-3 3"/><path d="m12 10 0 6"/></svg></a>
+                                </nav>
+                                <div class="mt-auto">
+                                    <a href="#" class="p-2 rounded-md hover:bg-bg-medium"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cards -->
+                <div class="component-section" id="cards">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Cards</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+                        <!-- Evidence Card -->
+                        <div class="space-y-4">
+                            <p class="text-sm font-medium">Evidence Card</p>
+                            <div class="w-full rounded-lg shadow-md bg-bg-light border border-border">
+                                <div class="p-4 border-b border-border">
+                                    <h3 class="text-lg font-semibold text-text-primary">Problem Solving</h3>
+                                    <p class="text-sm text-text-secondary">Level 3: Identifies and analyzes complex problems</p>
+                                </div>
+                                <div class="p-4">
+                                    <blockquote class="border-l-4 border-primary pl-4 text-sm italic">"Based on the conflicting stakeholder feedback, I first mapped out the dependencies before proposing a phased rollout to mitigate risks."</blockquote>
+                                </div>
+                                <div class="p-4 border-t border-border flex items-center gap-2">
+                                    <button class="bg-transparent text-text-secondary rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium transition-colors">See Reasoning</button>
+                                    <button class="bg-transparent text-text-secondary rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium transition-colors">Change</button>
+                                    <button class="bg-transparent text-error/80 rounded-md text-xs font-semibold px-3 py-1.5 hover:bg-bg-medium transition-colors">Delete</button>
+                                </div>
+                            </div>
+                            
+                             <p class="text-sm font-medium pt-4">Edited Evidence Card</p>
+                             <div class="w-full rounded-lg shadow-md bg-bg-light border border-border border-l-4 border-l-warning">
+                                <div class="p-4 border-b border-border">
+                                    <h3 class="text-lg font-semibold text-text-primary">Problem Solving</h3>
+                                    <p class="text-sm text-text-secondary">Level 3: Identifies and analyzes complex problems</p>
+                                </div>
+                                <div class="p-4">
+                                    <blockquote class="border-l-4 border-primary pl-4 text-sm italic">"The user feedback was varied. My initial step was to categorize it to find the core issue before developing a solution."</blockquote>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Competency Card -->
+                         <div>
+                            <p class="text-sm font-medium">Competency Analysis Card</p>
+                            <div class="w-full rounded-lg shadow-md bg-bg-light border border-border mt-4">
+                                <div class="p-4">
+                                    <h3 class="text-lg font-semibold text-text-primary">Communication</h3>
+                                </div>
+                                <div class="p-4 space-y-4">
+                                    <div>
+                                        <label class="text-sm font-medium mb-1 block">Level Achieved (Target: 4)</label>
+                                        <div class="flex items-center gap-2">
+                                            <input type="number" value="3" class="w-20 rounded-md border border-border px-3 py-2 bg-light shadow-sm text-sm">
+                                        </div>
+                                    </div>
+                                    <div class="relative group">
+                                         <label class="text-sm font-medium mb-1 block">Explanation</label>
+                                         <textarea rows="3" class="w-full rounded-md border border-border p-3 bg-light shadow-sm text-sm resize-none">The assessee demonstrates clear and concise communication but could improve on tailoring the message for different audiences.</textarea>
+                                         <button class="absolute top-0 right-0 p-1.5 bg-primary/10 text-primary rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                                         </button>
+                                    </div>
+                                </div>
+                            </div>
+                         </div>
+                    </div>
+                </div>
+
+                <!-- Modal -->
+                <div class="component-section" id="modal">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Modal</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm">
+                        <div class="relative h-80 bg-bg-medium rounded-md overflow-hidden">
+                           <!-- Overlay -->
+                            <div class="absolute inset-0 bg-black/50"></div>
+                            <!-- Modal -->
+                            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-bg-light rounded-lg shadow-lg p-6">
+                                <div class="flex justify-between items-center">
+                                    <h3 class="text-lg font-semibold text-text-primary">Archive Report?</h3>
+                                    <button class="text-text-muted hover:text-text-primary"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+                                </div>
+                                <p class="text-sm text-text-secondary mt-2">Are you sure you want to archive this report? This action can be undone later by viewing archived reports.</p>
+                                <div class="flex justify-end gap-3 mt-6">
+                                    <button class="bg-white text-text-secondary border border-border rounded-md text-sm font-semibold px-4 py-2 hover:bg-bg-medium transition-colors">Cancel</button>
+                                    <button class="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors">Archive</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="component-section" id="table">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Table</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm">
+                        <div class="flex justify-between items-center mb-4">
+                            <div class="w-64">
+                                <!-- Search Bar Molecule -->
+                                <div class="relative">
+                                     <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-text-muted"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                                    </div>
+                                    <input type="text" placeholder="Search reports..." class="w-full rounded-md border border-border pl-9 pr-3 py-2 bg-light shadow-sm text-sm">
+                                </div>
+                            </div>
+                            <button class="bg-primary text-white rounded-md text-sm font-semibold px-4 py-2 hover:bg-primary-hover transition-colors flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                New Report
+                            </button>
+                        </div>
+                        <div class="overflow-x-auto border border-border rounded-lg">
+                            <table class="w-full text-left text-sm">
+                                <thead>
+                                    <tr class="bg-bg-medium border-b border-border">
+                                        <th class="p-3 font-semibold text-text-secondary"><input type="checkbox" class="w-4 h-4 rounded-sm border-border accent-primary"></th>
+                                        <th class="p-3 font-semibold text-text-secondary">Date</th>
+                                        <th class="p-3 font-semibold text-text-secondary">Title</th>
+                                        <th class="p-3 font-semibold text-text-secondary">User</th>
+                                        <th class="p-3 font-semibold text-text-secondary text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr class="border-b border-border hover:bg-bg-medium cursor-pointer">
+                                        <td class="p-3"><input type="checkbox" class="w-4 h-4 rounded-sm border-border accent-primary"></td>
+                                        <td class="p-3">Oct 21, 2025</td>
+                                        <td class="p-3 font-medium text-text-primary">Analysis of Candidate A</td>
+                                        <td class="p-3">john.doe@example.com</td>
+                                        <td class="p-3 text-right"><button class="text-xs text-text-secondary hover:text-primary">Archive</button></td>
+                                    </tr>
+                                    <tr class="hover:bg-bg-medium cursor-pointer">
+                                        <td class="p-3"><input type="checkbox" class="w-4 h-4 rounded-sm border-border accent-primary"></td>
+                                        <td class="p-3">Oct 20, 2025</td>
+                                        <td class="p-3 font-medium text-text-primary">Leadership Potential Review</td>
+                                        <td class="p-3">jane.doe@example.com</td>
+                                        <td class="p-3 text-right"><button class="text-xs text-text-secondary hover:text-primary">Archive</button></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Date Range Picker -->
+                <div class="component-section" id="date-picker">
+                    <h3 class="text-xl font-semibold text-text-primary mb-4">Date Range Picker</h3>
+                    <div class="bg-bg-light p-6 rounded-lg shadow-sm">
+                        <div class="inline-block relative">
+                            <button class="w-72 bg-white text-text-secondary border border-border rounded-md text-sm px-4 py-2 hover:bg-bg-medium transition-colors flex justify-between items-center">
+                                <span>Oct 1, 2025 - Oct 21, 2025</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                            </button>
+                            <!-- Static Pop-over -->
+                            <div class="w-[600px] absolute top-full mt-2 bg-bg-light rounded-lg shadow-lg border border-border flex p-4 z-10">
+                                <div class="w-40 pr-4 border-r border-border flex flex-col gap-1">
+                                    <button class="text-left text-sm p-2 rounded-md hover:bg-bg-medium">Today</button>
+                                    <button class="text-left text-sm p-2 rounded-md hover:bg-bg-medium">Yesterday</button>
+                                    <button class="text-left text-sm p-2 rounded-md bg-bg-medium font-semibold text-primary">This Month</button>
+                                    <button class="text-left text-sm p-2 rounded-md hover:bg-bg-medium">Last 30 Days</button>
+                                    <button class="text-left text-sm p-2 rounded-md hover:bg-bg-medium">All Time</button>
+                                </div>
+                                <div class="flex-1 pl-4 grid grid-cols-2 gap-4">
+                                    <!-- Calendar Month 1 -->
+                                    <div>
+                                        <div class="text-center font-semibold text-sm mb-2">October 2025</div>
+                                        <div class="grid grid-cols-7 text-center text-xs text-text-muted">
+                                            <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+                                        </div>
+                                        <div class="grid grid-cols-7 text-center text-sm mt-2">
+                                            <span></span><span></span><span></span><span class="p-1.5 bg-primary text-white rounded-l-full">1</span><span class="p-1.5 bg-primary/20">2</span><span class="p-1.5 bg-primary/20">3</span><span class="p-1.5 bg-primary/20">4</span>
+                                            <span class="p-1.5 bg-primary/20">5</span><span class="p-1.5 bg-primary/20">6</span><span class="p-1.5 bg-primary/20">7</span><span class="p-1.5 bg-primary/20">8</span><span class="p-1.5 bg-primary/20">9</span><span class="p-1.5 bg-primary/20">10</span><span class="p-1.5 bg-primary/20">11</span>
+                                            <span class="p-1.5 bg-primary/20">12</span><span class="p-1.5 bg-primary/20">13</span><span class="p-1.5 bg-primary/20">14</span><span class="p-1.5 bg-primary/20">15</span><span class="p-1.5 bg-primary/20">16</span><span class="p-1.5 bg-primary/20">17</span><span class="p-1.5 bg-primary/20">18</span>
+                                            <span class="p-1.5 bg-primary/20">19</span><span class="p-1.5 bg-primary/20">20</span><span class="p-1.5 bg-primary text-white rounded-r-full">21</span><span class="p-1.5">22</span><span class="p-1.5">23</span><span class="p-1.5">24</span><span class="p-1.5">25</span>
+                                            <span class="p-1.5">26</span><span class="p-1.5">27</span><span class="p-1.5">28</span><span class="p-1.5">29</span><span class="p-1.5">30</span><span class="p-1.5">31</span>
+                                        </div>
+                                    </div>
+                                    <!-- Calendar Month 2 -->
+                                    <div>
+                                        <div class="text-center font-semibold text-sm mb-2">November 2025</div>
+                                        <div class="grid grid-cols-7 text-center text-xs text-text-muted">
+                                            <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+                                        </div>
+                                        <div class="grid grid-cols-7 text-center text-sm mt-2">
+                                            <span class="col-start-7 p-1.5">1</span>
+                                            <span class="p-1.5">2</span><span class="p-1.5">3</span><span class="p-1.5">4</span><span class="p-1.5">5</span><span class="p-1.5">6</span><span class="p-1.5">7</span><span class="p-1.5">8</span>
+                                            <span class="p-1.5">9</span><span class="p-1.5">10</span><span class="p-1.5">11</span><span class="p-1.5">12</span><span class="p-1.5">13</span><span class="p-1.5">14</span><span class="p-1.5">15</span>
+                                            <span class="p-1.5">16</span><span class="p-1.5">17</span><span class="p-1.5">18</span><span class="p-1.5">19</span><span class="p-1.5">20</span><span class="p-1.5">21</span><span class="p-1.5">22</span>
+                                            <span class="p-1.5">23</span><span class="p-1.5">24</span><span class="p-1.5">25</span><span class="p-1.5">26</span><span class="p-1.5">27</span><span class="p-1.5">28</span><span class="p-1.5">29</span>
+                                            <span class="p-1.5">30</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+        </main>
+    </div>
+
+</body>
+</html>

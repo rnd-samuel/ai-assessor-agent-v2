@@ -283,7 +283,14 @@ export default function ReportPage() {
   const [askAiContext, setAskAiContext] = useState<{
     context: string;
     currentText: string;
-    onApply: (newText: string) => void; // <--- The magic callback
+    onApply: (newText: string) => void;
+    contextType: 'PHASE_2' | 'PHASE_3';
+    competencyName?: string;
+    competencyLevel?: number;
+    competencyDefinition?: string;
+    levelDescriptions?: string[];
+    generalContext?: string;
+    specificContext?: string;
   } | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
   const [isRefining, setIsRefining] = useState(false);
@@ -860,9 +867,28 @@ export default function ReportPage() {
     }
   };
 
-  // Inside ReportPage component
-  const handleAskAI = (context: string, currentText: string, onApply: (t: string) => void) => {
-    setAskAiContext({ context, currentText, onApply });
+  // Inside ReportPage component - Updated for context-aware Ask AI
+  const handleAskAI = (
+    context: string,
+    currentText: string,
+    onApply: (t: string) => void,
+    contextType: 'PHASE_2' | 'PHASE_3' = 'PHASE_2',
+    contextData?: {
+      competencyName?: string;
+      competencyLevel?: number;
+      competencyDefinition?: string;
+      levelDescriptions?: string[];
+      generalContext?: string;
+      specificContext?: string;
+    }
+  ) => {
+    setAskAiContext({
+      context,
+      currentText,
+      onApply,
+      contextType,
+      ...contextData
+    });
     setAiPrompt('');
     setModals(prev => ({ ...prev, askAI: true }));
   };
@@ -873,22 +899,30 @@ export default function ReportPage() {
     setIsRefining(true);
     try {
       const response = await apiService.post(`/reports/${reportId}/refine`, {
-        prompt: aiPrompt,
-        currentText: askAiContext.currentText,
-        context: askAiContext.context
+        userInstruction: aiPrompt,
+        currentContent: askAiContext.currentText,
+        contextType: askAiContext.contextType,
+        // Phase 2 context
+        competencyName: askAiContext.competencyName,
+        competencyLevel: askAiContext.competencyLevel,
+        competencyDefinition: askAiContext.competencyDefinition,
+        levelDescriptions: askAiContext.levelDescriptions,
+        // Phase 3 context  
+        generalContext: askAiContext.generalContext,
+        specificContext: askAiContext.specificContext
       });
 
-      const { refinedText } = response.data;
+      const { refinedText, reasoning } = response.data;
 
       askAiContext.onApply(refinedText);
-      addToast("Text refined by AI.", 'success');
+      addToast(`AI applied change: ${reasoning?.substring(0, 50)}...`, 'success');
 
       // Close modal
       setModals(prev => ({ ...prev, askAI: false }));
 
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      addToast("Failed to refine text.", 'error');
+      addToast(error.response?.data?.message || "Failed to refine text.", 'error');
     } finally {
       setIsRefining(false);
     }
