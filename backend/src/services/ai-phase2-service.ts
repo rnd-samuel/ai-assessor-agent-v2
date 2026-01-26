@@ -488,7 +488,7 @@ async function evaluateKeyBehaviors(
 
   // If absolutely no evidence exists for this competency, skip AI and return defaults.
   if (!allRelevantEvidence || allRelevantEvidence.length === 0) {
-    return generateDefaultJudgments(lvlObj);
+    return { judgments: generateDefaultJudgments(lvlObj), aiLogId: null };
   }
 
   const evidenceListText = allRelevantEvidence.map((e: any) =>
