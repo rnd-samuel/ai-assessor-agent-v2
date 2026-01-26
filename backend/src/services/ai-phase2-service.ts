@@ -484,7 +484,7 @@ async function evaluateKeyBehaviors(
   reportContext: string, reportId: string, userId: string, jobId: string, projectId: string
 ) {
   const lvlObj = comp.level.find((l: any) => String(l.nomor) === String(level));
-  if (!lvlObj) return [];
+  if (!lvlObj) return { judgments: [], aiLogId: null };
 
   // If absolutely no evidence exists for this competency, skip AI and return defaults.
   if (!allRelevantEvidence || allRelevantEvidence.length === 0) {
