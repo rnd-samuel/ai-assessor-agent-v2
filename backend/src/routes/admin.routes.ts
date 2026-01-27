@@ -27,58 +27,63 @@ router.use(authenticateToken, authorizeRole('Admin'));
  * Fetch paginated AI logs
  */
 router.get('/logs', async (req: AuthenticatedRequest, res) => {
-    const { 
-        page = 1, 
-        limit = 20, 
-        projectId, 
-        reportId,
-        model,
-        startDate, 
-        endDate 
-    } = req.query;
+  const {
+    page = 1,
+    limit = 20,
+    projectId,
+    reportId,
+    model,
+    action,
+    startDate,
+    endDate
+  } = req.query;
 
-    const offset = (Number(page) - 1) * Number(limit);
-    
-    try {
-        let whereClauses: string[] = [];
-        let params: any[] = [];
-        let paramCount = 1;
+  const offset = (Number(page) - 1) * Number(limit);
 
-        // 1. Build Dynamic WHERE clause
-        if (projectId) {
-            whereClauses.push(`l.project_id = $${paramCount++}`);
-            params.push(projectId);
-        }
-        if (reportId) {
-            whereClauses.push(`l.report_id = $${paramCount++}`);
-            params.push(reportId);
-        }
-        if (model) {
-            whereClauses.push(`l.model = $${paramCount++}`);
-            params.push(model);
-        }
-        if (startDate) {
-            whereClauses.push(`l.created_at >= $${paramCount++}`);
-            params.push(startDate); // Expect ISO string
-        }
-        if (endDate) {
-            whereClauses.push(`l.created_at <= $${paramCount++}`);
-            params.push(endDate);
-        }
+  try {
+    let whereClauses: string[] = [];
+    let params: any[] = [];
+    let paramCount = 1;
 
-        const whereSQL = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
+    // 1. Build Dynamic WHERE clause
+    if (projectId) {
+      whereClauses.push(`l.project_id = $${paramCount++}`);
+      params.push(projectId);
+    }
+    if (reportId) {
+      whereClauses.push(`l.report_id = $${paramCount++}`);
+      params.push(reportId);
+    }
+    if (model) {
+      whereClauses.push(`l.model = $${paramCount++}`);
+      params.push(model);
+    }
+    if (action) {
+      whereClauses.push(`l.action = $${paramCount++}`);
+      params.push(action);
+    }
+    if (startDate) {
+      whereClauses.push(`l.created_at >= $${paramCount++}`);
+      params.push(startDate); // Expect ISO string
+    }
+    if (endDate) {
+      whereClauses.push(`l.created_at <= $${paramCount++}`);
+      params.push(endDate);
+    }
 
-        // 2. Count Query
-        const countRes = await query(
-            `SELECT COUNT(*) FROM ai_logs l ${whereSQL}`, 
-            params
-        );
+    const whereSQL = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
 
-        // 3. Data Query
-        // We add the limit/offset params at the end
-        const finalParams = [...params, Number(limit), offset];
-        
-        const dataQuery = `
+    // 2. Count Query + Total Cost Query
+    const countRes = await query(
+      `SELECT COUNT(*), COALESCE(SUM(cost_usd), 0) as total_cost FROM ai_logs l ${whereSQL}`,
+      params
+    );
+
+    // 3. Data Query
+    // We add the limit/offset params at the end
+    const finalParams = [...params, Number(limit), offset];
+
+    const dataQuery = `
             SELECT l.id, l.action, l.model, l.cost_usd, l.duration_ms, l.status, l.created_at, 
                    l.input_tokens, l.output_tokens,
                    u.email as user_email, 
@@ -93,19 +98,20 @@ router.get('/logs', async (req: AuthenticatedRequest, res) => {
             LIMIT $${paramCount} OFFSET $${paramCount + 1}
         `;
 
-        const logs = await query(dataQuery, finalParams);
+    const logs = await query(dataQuery, finalParams);
 
-        res.json({
-            data: logs.rows,
-            total: Number(countRes.rows[0].count),
-            page: Number(page),
-            limit: Number(limit)
-        });
+    res.json({
+      data: logs.rows,
+      total: Number(countRes.rows[0].count),
+      totalCost: Number(countRes.rows[0].total_cost),
+      page: Number(page),
+      limit: Number(limit)
+    });
 
-    } catch (error) {
-        console.error("Fetch Logs Error:", error);
-        res.status(500).send({ message: "Failed to fetch logs" });
-    }
+  } catch (error) {
+    console.error("Fetch Logs Error:", error);
+    res.status(500).send({ message: "Failed to fetch logs" });
+  }
 });
 
 /**
@@ -113,128 +119,128 @@ router.get('/logs', async (req: AuthenticatedRequest, res) => {
  * Fetch full details (heavy text)
  */
 router.get('/logs/:id', async (req: AuthenticatedRequest, res) => {
-    try {
-        // 1. Fetch the log entry
-        const logRes = await query("SELECT * FROM ai_logs WHERE id = $1", [req.params.id]);
-        if (logRes.rows.length === 0) {
-            return res.status(404).send({ message: "Log not found" });
-        }
-        
-        const log = logRes.rows[0];
-        let currentContent = null;
+  try {
+    // 1. Fetch the log entry
+    const logRes = await query("SELECT * FROM ai_logs WHERE id = $1", [req.params.id]);
+    if (logRes.rows.length === 0) {
+      return res.status(404).send({ message: "Log not found" });
+    }
 
-        // 2. Fetch the "Real World" result based on the action type
-        // This allows us to compare the original AI output vs. what is currently in the DB (User Edits)
-        switch (log.action) {
-            case 'PHASE_1_EXTRACTION':
-                // Fetch all evidence items created by this log (even if archived/deleted, to show history)
-                const evRes = await query(
-                    `SELECT id, competency, level, kb, quote, source, reasoning, is_archived 
+    const log = logRes.rows[0];
+    let currentContent = null;
+
+    // 2. Fetch the "Real World" result based on the action type
+    // This allows us to compare the original AI output vs. what is currently in the DB (User Edits)
+    switch (log.action) {
+      case 'PHASE_1_EXTRACTION':
+        // Fetch all evidence items created by this log (even if archived/deleted, to show history)
+        const evRes = await query(
+          `SELECT id, competency, level, kb, quote, source, reasoning, is_archived 
                      FROM evidence 
                      WHERE ai_log_id = $1
-                     ORDER BY is_archived ASC, created_at ASC`, 
-                    [log.id]
-                );
-                currentContent = evRes.rows;
-                break;
+                     ORDER BY is_archived ASC, created_at ASC`,
+          [log.id]
+        );
+        currentContent = evRes.rows;
+        break;
 
-            case 'PHASE_2_JUDGMENT':
-                // Fetch the Key Behavior judgments linked to this log
-                const kbRes = await query(
-                    `SELECT id, level, kb_text, status, reasoning 
+      case 'PHASE_2_JUDGMENT':
+        // Fetch the Key Behavior judgments linked to this log
+        const kbRes = await query(
+          `SELECT id, level, kb_text, status, reasoning 
                      FROM analysis_key_behaviors 
                      WHERE judgment_log_id = $1
-                     ORDER BY level, kb_text`, 
-                    [log.id]
-                );
-                currentContent = kbRes.rows;
-                break;
+                     ORDER BY level, kb_text`,
+          [log.id]
+        );
+        currentContent = kbRes.rows;
+        break;
 
-            case 'PHASE_2_NARRATIVE':
-                // Fetch the Level & Explanation linked to this log
-                const narrativeRes = await query(
-                    `SELECT id, competency, level_achieved, explanation 
+      case 'PHASE_2_NARRATIVE':
+        // Fetch the Level & Explanation linked to this log
+        const narrativeRes = await query(
+          `SELECT id, competency, level_achieved, explanation 
                      FROM competency_analysis 
-                     WHERE narrative_log_id = $1`, 
-                    [log.id]
-                );
-                // Usually returns 1 row
-                currentContent = narrativeRes.rows.length > 0 ? narrativeRes.rows[0] : null;
-                break;
+                     WHERE narrative_log_id = $1`,
+          [log.id]
+        );
+        // Usually returns 1 row
+        currentContent = narrativeRes.rows.length > 0 ? narrativeRes.rows[0] : null;
+        break;
 
-            case 'PHASE_2_RECOMMENDATIONS':
-                // Fetch the Recommendations linked to this log
-                const recRes = await query(
-                    `SELECT id, competency, development_recommendations 
+      case 'PHASE_2_RECOMMENDATIONS':
+        // Fetch the Recommendations linked to this log
+        const recRes = await query(
+          `SELECT id, competency, development_recommendations 
                      FROM competency_analysis 
-                     WHERE recommendations_log_id = $1`, 
-                    [log.id]
-                );
-                // Usually returns 1 row
-                currentContent = recRes.rows.length > 0 ? recRes.rows[0] : null;
-                break;
+                     WHERE recommendations_log_id = $1`,
+          [log.id]
+        );
+        // Usually returns 1 row
+        currentContent = recRes.rows.length > 0 ? recRes.rows[0] : null;
+        break;
 
-            case 'PHASE_3_CRITIQUE':
-                // Fetch the final Executive Summary linked to this log
-                const summaryRes = await query(
-                    `SELECT id, overview, strengths, areas_for_improvement, recommendations 
+      case 'PHASE_3_CRITIQUE':
+        // Fetch the final Executive Summary linked to this log
+        const summaryRes = await query(
+          `SELECT id, overview, strengths, areas_for_improvement, recommendations 
                      FROM executive_summary 
-                     WHERE ai_log_id = $1`, 
-                    [log.id]
-                );
-                // Usually returns 1 row
-                currentContent = summaryRes.rows.length > 0 ? summaryRes.rows[0] : null;
-                break;
-            
-            case 'PHASE_3_DRAFT':
-                // Drafts are intermediate and usually not saved to the final table with a unique ID link 
-                // (only the final critique is). So we likely won't find a direct link unless we chose to store draft_log_id.
-                // For now, we return null, or you could try to fetch the summary if you assume 1:1 mapping (risky).
-                currentContent = null; 
-                break;
+                     WHERE ai_log_id = $1`,
+          [log.id]
+        );
+        // Usually returns 1 row
+        currentContent = summaryRes.rows.length > 0 ? summaryRes.rows[0] : null;
+        break;
 
-            default:
-                // Unknown action or generic log (no linked content)
-                currentContent = null;
-                break;
-        }
+      case 'PHASE_3_DRAFT':
+        // Drafts are intermediate and usually not saved to the final table with a unique ID link 
+        // (only the final critique is). So we likely won't find a direct link unless we chose to store draft_log_id.
+        // For now, we return null, or you could try to fetch the summary if you assume 1:1 mapping (risky).
+        currentContent = null;
+        break;
 
-        // 3. Return combined data
-        res.json({
-            ...log,
-            current_content_snapshot: currentContent // The frontend will use this to Diff
-        });
-
-    } catch (error) {
-        console.error("Error fetching log details:", error);
-        res.status(500).send({ message: "Error fetching log details" });
+      default:
+        // Unknown action or generic log (no linked content)
+        currentContent = null;
+        break;
     }
+
+    // 3. Return combined data
+    res.json({
+      ...log,
+      current_content_snapshot: currentContent // The frontend will use this to Diff
+    });
+
+  } catch (error) {
+    console.error("Error fetching log details:", error);
+    res.status(500).send({ message: "Error fetching log details" });
+  }
 });
 
 router.get('/dataset/export', async (req: AuthenticatedRequest, res) => {
-    try {
-        // Extract filters from query string
-        const filters = {
-            startDate: req.query.startDate as string,
-            endDate: req.query.endDate as string,
-            projectId: req.query.projectId as string,
-            reportId: req.query.reportId as string,
-            model: req.query.model as string
-        };
+  try {
+    // Extract filters from query string
+    const filters = {
+      startDate: req.query.startDate as string,
+      endDate: req.query.endDate as string,
+      projectId: req.query.projectId as string,
+      reportId: req.query.reportId as string,
+      model: req.query.model as string
+    };
 
-        const dataset = await generateFineTuningDataset(filters);
-        
-        // Convert to JSONL string
-        const jsonl = dataset.map(d => JSON.stringify(d)).join('\n');
-        
-        res.setHeader('Content-Type', 'application/jsonl');
-        res.setHeader('Content-Disposition', 'attachment; filename="fine_tuning_data.jsonl"');
-        res.send(jsonl);
+    const dataset = await generateFineTuningDataset(filters);
 
-    } catch (error) {
-        console.error("Export Error:", error);
-        res.status(500).send({ message: "Failed to generate dataset" });
-    }
+    // Convert to JSONL string
+    const jsonl = dataset.map(d => JSON.stringify(d)).join('\n');
+
+    res.setHeader('Content-Type', 'application/jsonl');
+    res.setHeader('Content-Disposition', 'attachment; filename="fine_tuning_data.jsonl"');
+    res.send(jsonl);
+
+  } catch (error) {
+    console.error("Export Error:", error);
+    res.status(500).send({ message: "Failed to generate dataset" });
+  }
 });
 
 /**
@@ -245,14 +251,14 @@ router.get('/stats/usage', async (req: AuthenticatedRequest, res) => {
   try {
     // In a real app, you'd query a 'usage_logs' table here.
     const stats = {
-        apiRequests: [120, 150, 180, 220, 190, 240, 260], // Last 7 days
-        tokenUsage: {
-            input: [50000, 60000, 55000, 70000, 65000, 75000, 80000],
-            output: [20000, 25000, 22000, 30000, 28000, 32000, 35000]
-        },
-        avgWaitTime: [15.2, 12.5, 18.1],
-        errorRate: 1.2,
-        totalCost: 123.45
+      apiRequests: [120, 150, 180, 220, 190, 240, 260], // Last 7 days
+      tokenUsage: {
+        input: [50000, 60000, 55000, 70000, 65000, 75000, 80000],
+        output: [20000, 25000, 22000, 30000, 28000, 32000, 35000]
+      },
+      avgWaitTime: [15.2, 12.5, 18.1],
+      errorRate: 1.2,
+      totalCost: 123.45
     };
     res.json(stats);
   } catch (error) {
@@ -268,14 +274,14 @@ router.get('/stats/usage', async (req: AuthenticatedRequest, res) => {
 router.get('/stats/queue', async (req: AuthenticatedRequest, res) => {
   try {
     const counts = await aiGenerationQueue.getJobCounts(
-        'active', 'completed', 'failed', 'delayed', 'waiting'
+      'active', 'completed', 'failed', 'delayed', 'waiting'
     );
-    
+
     res.json({
-        active: counts.active,
-        completed: counts.completed,
-        failed: counts.failed,
-        waiting: counts.waiting + counts.delayed
+      active: counts.active,
+      completed: counts.completed,
+      failed: counts.failed,
+      waiting: counts.waiting + counts.delayed
     });
   } catch (error) {
     console.error("Error fetching queue stats:", error);
@@ -317,13 +323,13 @@ router.post('/knowledge-base', upload.single('file'), async (req: AuthenticatedR
 
     // 3. Trigger Context Update Job
     await aiGenerationQueue.add('update-global-context', {
-        gcsPath: gcsPath,
-        userId: creatorId
+      gcsPath: gcsPath,
+      userId: creatorId
     });
 
-    res.status(201).json({ 
-        message: "File uploaded. Global Context is updating...",
-        file: result.rows[0] 
+    res.status(201).json({
+      message: "File uploaded. Global Context is updating...",
+      file: result.rows[0]
     });
 
   } catch (error) {
@@ -336,15 +342,15 @@ router.post('/knowledge-base', upload.single('file'), async (req: AuthenticatedR
  * Delete Global Knowledge File
  */
 router.delete('/knowledge-base/:id', async (req: AuthenticatedRequest, res) => {
-    // Note: Deleting a file does NOT automatically strip its info from the "Distilled Guide".
-    // The guide is a synthesis. To remove info, you'd typically need to regenerate the guide 
-    // or edit it manually (future feature). For now, we just delete the file record.
-    try {
-        await query('DELETE FROM global_knowledge_files WHERE id = $1', [req.params.id]);
-        res.send({ message: "File deleted." });
-    } catch (error) {
-        res.status(500).send({ message: "Server error" });
-    }
+  // Note: Deleting a file does NOT automatically strip its info from the "Distilled Guide".
+  // The guide is a synthesis. To remove info, you'd typically need to regenerate the guide 
+  // or edit it manually (future feature). For now, we just delete the file record.
+  try {
+    await query('DELETE FROM global_knowledge_files WHERE id = $1', [req.params.id]);
+    res.send({ message: "File deleted." });
+  } catch (error) {
+    res.status(500).send({ message: "Server error" });
+  }
 });
 
 /**
@@ -446,7 +452,7 @@ router.delete('/dictionaries/:id', async (req: AuthenticatedRequest, res) => {
     console.error('Error deleting dictionary:', error);
     // Check for foreign key violation (if used in projects)
     if ((error as any).code === '23503') {
-        return res.status(400).send({ message: 'Cannot delete: This dictionary is currently used by one or more projects.' });
+      return res.status(400).send({ message: 'Cannot delete: This dictionary is currently used by one or more projects.' });
     }
     res.status(500).send({ message: 'Internal server error' });
   }
@@ -504,7 +510,7 @@ router.put('/simulation-methods/:id', async (req: AuthenticatedRequest, res) => 
     // Requirement says "edit/delete only enabled if never used".
     // We'll do a strict check for now.
     const check = await query('SELECT 1 FROM projects_to_global_methods WHERE method_id = $1 LIMIT 1', [id]);
-    
+
     // NOTE: Editing the *description* might be safe even if used, but renaming might be confusing. 
     // For strict compliance with "edit only enabled if never used", uncomment this:
     /*
@@ -519,7 +525,7 @@ router.put('/simulation-methods/:id', async (req: AuthenticatedRequest, res) => 
     );
 
     if (result.rowCount === 0) return res.status(404).send({ message: "Method not found" });
-    
+
     res.json(result.rows[0]);
 
   } catch (error: any) {
@@ -538,7 +544,7 @@ router.delete('/simulation-methods/:id', async (req: AuthenticatedRequest, res) 
     // Check if used in projects first
     const check = await query('SELECT 1 FROM projects_to_global_methods WHERE method_id = $1', [id]);
     if (check.rowCount && check.rowCount > 0) {
-       return res.status(400).send({ message: 'Cannot delete: This method is being used by active projects.' });
+      return res.status(400).send({ message: 'Cannot delete: This method is being used by active projects.' });
     }
 
     const result = await query('DELETE FROM global_simulation_methods WHERE id = $1 RETURNING id', [id]);
@@ -603,15 +609,15 @@ router.post('/simulation-files', upload.single('file'), async (req: Authenticate
 
     // 3. Trigger Context Update
     await aiGenerationQueue.add('update-sim-context', {
-        fileId: newFileId,
-        methodId,
-        gcsPath,
-        userId: creatorId
+      fileId: newFileId,
+      methodId,
+      gcsPath,
+      userId: creatorId
     });
 
     res.status(201).json({
-        message: "File uploaded. Simulation Context is updating...",
-        file: result.rows[0]
+      message: "File uploaded. Simulation Context is updating...",
+      file: result.rows[0]
     });
 
   } catch (error) {
@@ -728,7 +734,7 @@ router.post('/users', async (req: AuthenticatedRequest, res) => {
  */
 router.delete('/users/:id', async (req: AuthenticatedRequest, res) => {
   const { id } = req.params;
-  
+
   // Prevent an admin from deleting themselves
   if (id === req.user?.userId) {
     return res.status(400).send({ message: "You cannot delete your own account." });
@@ -762,7 +768,7 @@ router.put('/users/:id', async (req: AuthenticatedRequest, res) => {
       // Case A: Updating Password
       const salt = await bcrypt.genSalt(10);
       const passwordHash = await bcrypt.hash(password, salt);
-      
+
       queryText = `
         UPDATE users 
         SET name = $1, email = $2, role = $3, password_hash = $4 
@@ -792,7 +798,7 @@ router.put('/users/:id', async (req: AuthenticatedRequest, res) => {
   } catch (error: any) {
     console.error('Error updating user:', error);
     if (error.code === '23505') {
-        return res.status(409).send({ message: 'Email already in use.' });
+      return res.status(409).send({ message: 'Email already in use.' });
     }
     res.status(500).send({ message: 'Internal server error' });
   }
